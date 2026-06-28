@@ -1,0 +1,18 @@
+{
+  "name": "aegis-netshield-backend",
+  "version": "1.0.0",
+  "description": "Windows TCP/IP connection investigator backend",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dns-packet": "^5.6.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  }
+}

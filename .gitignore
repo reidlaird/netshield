@@ -1,0 +1,12 @@
+node_modules/
+frontend/dist/
+backend/data/
+.env
+.env.*
+*.log
+*.sqlite
+*.sqlite-*
+*.db
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
