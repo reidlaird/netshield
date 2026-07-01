@@ -398,38 +398,52 @@ h3 {
   font-size: 0.75rem;
 }
 
-.world-map {
-  display: block;
-  width: calc(100% - 20px);
-  margin: 10px;
-  min-height: 260px;
+.map-panel .leaflet-container {
+  background: #071014;
+  font-family: inherit;
 }
 
-.world-map rect {
-  fill: #071014;
+.map-panel .leaflet-control-zoom a {
+  background: rgba(16, 26, 32, 0.85);
+  color: var(--text);
+  border-color: var(--line-bright);
 }
 
-.world-map path {
-  fill: #1d343d;
-  stroke: #36545e;
-  stroke-width: 1.5;
+.map-panel .leaflet-control-zoom a:hover {
+  background: rgba(16, 26, 32, 0.95);
+  color: var(--cyan);
+  border-color: var(--cyan);
 }
 
-.map-point circle {
-  fill: var(--amber);
-  stroke: var(--ink);
-  stroke-width: 2;
-  cursor: pointer;
+.map-panel .leaflet-control-attribution {
+  background: rgba(7, 16, 20, 0.7);
+  color: var(--muted);
+  font-size: 0.65rem;
 }
 
-.map-point.is-selected circle {
-  fill: var(--cyan);
-  filter: drop-shadow(0 0 8px rgba(65, 199, 215, 0.8));
+.map-panel .leaflet-control-attribution a {
+  color: var(--muted);
 }
 
-.route-point {
-  fill: var(--green);
-  opacity: 0.8;
+.map-panel .leaflet-tooltip {
+  background: rgba(16, 26, 32, 0.92);
+  border: 1px solid var(--line-bright);
+  color: var(--text);
+  border-radius: 6px;
+}
+
+.map-panel .leaflet-tooltip-top::before {
+  border-top-color: var(--line-bright);
+}
+
+.map-tooltip__title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.78rem;
+}
+
+.map-tooltip__sub {
+  color: var(--muted);
+  font-size: 0.72rem;
 }
 
 .map-caption {

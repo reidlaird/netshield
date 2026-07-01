@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { WorldMapSvg } from './WorldMapSvg';
+import { EndpointMap } from './EndpointMap';
 import './App.css';
 
 type CollectorStatus = {
@@ -663,14 +663,6 @@ function WorldMap(props: {
     .map((hop) => props.investigations[hop.address])
     .filter((investigation) => typeof investigation?.geo?.latitude === 'number' && typeof investigation?.geo?.longitude === 'number');
 
-  const getCoords = (lat: number, lng: number) => {
-    const x = ((lng + 180) / 360) * 1000;
-    const y = ((90 - lat) / 180) * 500;
-    return { x, y };
-  };
-
-  const routePositions = routePoints.map(inv => getCoords(inv.geo.latitude!, inv.geo.longitude!));
-
   return (
     <section className="panel map-panel" style={{ display: 'flex', flexDirection: 'column' }}>
       <div className="panel__header">
@@ -679,57 +671,28 @@ function WorldMap(props: {
           <p>{plotted.length} located endpoints</p>
         </div>
       </div>
-      <div style={{ flex: 1, minHeight: '300px', width: '100%', position: 'relative', zIndex: 0 }}>
-        <WorldMapSvg>
-          {routePositions.length > 1 && (
-            <polyline 
-              points={routePositions.map(p => `${p.x},${p.y}`).join(' ')} 
-              fill="none"
-              stroke="var(--green, #58d68d)" 
-              strokeWidth="2" 
-              strokeDasharray="5, 10" 
-              vectorEffect="non-scaling-stroke"
-            />
-          )}
-          {routePoints.map((investigation, index) => {
-            const { x, y } = getCoords(investigation.geo.latitude!, investigation.geo.longitude!);
-            return (
-              <circle
-                key={`${investigation.ip}-${index}`}
-                cx={x}
-                cy={y}
-                r={4}
-                fill="var(--green, #58d68d)"
-                opacity={0.8}
-                vectorEffect="non-scaling-stroke"
-              />
-            );
-          })}
-          {plotted.map(({ connection, investigation }) => {
-            const isSelected = props.selected?.id === connection.id;
-            const { x, y } = getCoords(investigation.geo.latitude!, investigation.geo.longitude!);
-            return (
-              <circle
-                key={connection.id}
-                cx={x}
-                cy={y}
-                r={isSelected ? 8 : 5}
-                fill={isSelected ? 'var(--cyan, #41c7d7)' : 'var(--amber, #f0b451)'}
-                opacity={isSelected ? 0.9 : 0.6}
-                stroke={isSelected ? 'var(--cyan, #41c7d7)' : 'var(--amber, #f0b451)'}
-                strokeWidth={isSelected ? 2 : 1}
-                style={{ cursor: 'pointer', transition: 'all 0.2s ease-in-out' }}
-                onClick={() => props.onSelect(connection)}
-                vectorEffect="non-scaling-stroke"
-              >
-                <title>{connection.remoteAddress}&#10;{investigation.geo.city ? `${investigation.geo.city}, ${investigation.geo.country}` : investigation.geo.country}</title>
-              </circle>
-            );
-          })}
-        </WorldMapSvg>
+      <div style={{ flex: 1, minHeight: '300px', margin: '0 10px', borderRadius: '8px', overflow: 'hidden', position: 'relative', zIndex: 0 }}>
+        <EndpointMap
+          points={plotted.map(({ connection, investigation }) => ({
+            id: connection.id,
+            latitude: investigation.geo.latitude!,
+            longitude: investigation.geo.longitude!,
+            label: connection.remoteAddress,
+            sublabel: investigation.geo.city ? `${investigation.geo.city}, ${investigation.geo.country}` : investigation.geo.country,
+            selected: props.selected?.id === connection.id,
+          }))}
+          routePoints={routePoints.map((investigation) => ({
+            latitude: investigation.geo.latitude!,
+            longitude: investigation.geo.longitude!,
+          }))}
+          onSelect={(id) => {
+            const item = plotted.find((entry) => entry.connection.id === id);
+            if (item) props.onSelect(item.connection);
+          }}
+        />
       </div>
       <div className="map-caption" style={{ marginTop: '10px' }}>
-        Select a connection and run Investigate to locate it. Route hops appear after Trace route when location data is available.
+        Select a connection and run Investigate to locate it. Zoom in to see countries, regions, and cities. Route hops appear after Trace route when location data is available.
       </div>
     </section>
   );
