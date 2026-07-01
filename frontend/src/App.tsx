@@ -143,7 +143,12 @@ function App() {
   const [sortKey, setSortKey] = useState<'processName' | 'remote' | 'local' | 'interfaceAlias' | 'transfer' | 'lastSeen'>('lastSeen');
   const [sortAsc, setSortAsc] = useState(false);
   const [metricFilter, setMetricFilter] = useState<'all' | 'public' | 'processes' | 'ipv6'>('all');
+  const [sidebarPanel, setSidebarPanel] = useState<'history' | 'reports' | 'settings' | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  const toggleSidebarPanel = (panel: 'history' | 'reports' | 'settings') => {
+    setSidebarPanel((prev) => (prev === panel ? null : panel));
+  };
 
   const getApiUrl = (path: string) => {
     const origin = window.location.port === '5173'
@@ -447,7 +452,52 @@ function App() {
   const selectedRoute = selectedConnection ? routes[selectedConnection.remoteAddress] : undefined;
 
   return (
-    <main className="shell">
+    <div className="app-layout">
+      <aside className="sidebar">
+        <nav className="sidebar__nav">
+          <SidebarButton
+            icon="🕘"
+            label="History"
+            count={history.length}
+            isActive={sidebarPanel === 'history'}
+            onClick={() => toggleSidebarPanel('history')}
+          />
+          <SidebarButton
+            icon="📄"
+            label="Reports"
+            count={reports.length}
+            isActive={sidebarPanel === 'reports'}
+            onClick={() => toggleSidebarPanel('reports')}
+          />
+          <SidebarButton
+            icon="⚙️"
+            label="Settings"
+            isActive={sidebarPanel === 'settings'}
+            onClick={() => toggleSidebarPanel('settings')}
+          />
+        </nav>
+        {sidebarPanel && (
+          <div className="sidebar__drawer">
+            {sidebarPanel === 'history' && (
+              <HistoryPanel history={history} onRefresh={refreshHistory} onClear={clearHistory} onSelect={setSelectedId} />
+            )}
+            {sidebarPanel === 'reports' && (
+              <ReportsPanel
+                reports={reports}
+                onView={setViewingReport}
+                onOpen={openReport}
+                onDownload={downloadReport}
+                onDelete={deleteReport}
+              />
+            )}
+            {sidebarPanel === 'settings' && (
+              <SettingsPanel settings={settings} status={status} onSave={saveSettings} />
+            )}
+          </div>
+        )}
+      </aside>
+
+      <main className="shell">
       <header className="topbar">
         <div>
           <p className="eyebrow">NetShield</p>
@@ -531,18 +581,6 @@ function App() {
         </div>
       </section>
 
-      <section className="lower-grid">
-        <HistoryPanel history={history} onRefresh={refreshHistory} onClear={clearHistory} onSelect={setSelectedId} />
-        <ReportsPanel
-          reports={reports}
-          onView={setViewingReport}
-          onOpen={openReport}
-          onDownload={downloadReport}
-          onDelete={deleteReport}
-        />
-        <SettingsPanel settings={settings} status={status} onSave={saveSettings} />
-      </section>
-
       {viewingReport && (
         <ReportViewer
           report={viewingReport}
@@ -553,7 +591,35 @@ function App() {
           onClose={() => setViewingReport(null)}
         />
       )}
-    </main>
+      </main>
+    </div>
+  );
+}
+
+function SidebarButton({
+  icon,
+  label,
+  count,
+  isActive,
+  onClick
+}: {
+  icon: string;
+  label: string;
+  count?: number;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`sidebar__btn ${isActive ? 'is-active' : ''}`}
+      onClick={onClick}
+      title={`${label}${isActive ? ' (click to collapse)' : ''}`}
+    >
+      <span className="sidebar__btn-icon">{icon}</span>
+      <span className="sidebar__btn-label">{label}</span>
+      {typeof count === 'number' && count > 0 && <span className="sidebar__btn-count">{count > 99 ? '99+' : count}</span>}
+    </button>
   );
 }
 

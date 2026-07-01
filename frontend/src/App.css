@@ -82,13 +82,120 @@ select {
   padding: 7px 10px;
 }
 
+.app-layout {
+  display: flex;
+  align-items: stretch;
+  min-height: 100vh;
+}
+
 .shell {
+  flex: 1;
+  min-width: 0;
   width: min(1800px, 100%);
   margin: 0 auto;
   padding: 18px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* Collapsible left sidebar */
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-shrink: 0;
+  z-index: 100;
+}
+
+.sidebar__nav {
+  width: 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 8px;
+  background: rgba(12, 20, 25, 0.95);
+  border-right: 1px solid var(--line);
+}
+
+.sidebar__btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 9px 2px 7px;
+  min-height: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--muted);
+}
+
+.sidebar__btn:hover {
+  background: rgba(65, 199, 215, 0.08);
+  border-color: var(--line-bright);
+  color: var(--text);
+}
+
+.sidebar__btn.is-active {
+  background: rgba(65, 199, 215, 0.12);
+  border-color: rgba(65, 199, 215, 0.4);
+  color: var(--cyan);
+}
+
+.sidebar__btn-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.sidebar__btn-label {
+  font-size: 0.6rem;
+  font-family: 'IBM Plex Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sidebar__btn-count {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  background: rgba(65, 199, 215, 0.15);
+  border: 1px solid rgba(65, 199, 215, 0.35);
+  color: var(--cyan);
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-family: 'IBM Plex Mono', monospace;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.sidebar__drawer {
+  width: min(380px, 82vw);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: rgba(12, 20, 25, 0.97);
+  border-right: 1px solid var(--line);
+}
+
+/* Panels fill the drawer edge-to-edge and use its full height */
+.sidebar__drawer .panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  min-height: 0;
+}
+
+.sidebar__drawer .history-list,
+.sidebar__drawer .reports-list {
+  max-height: none;
+  flex: 1;
 }
 
 .topbar {
@@ -295,28 +402,20 @@ h3 {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(620px, 1.5fr) minmax(420px, 1fr);
+  grid-template-columns: minmax(480px, 1.55fr) minmax(360px, 1fr);
   gap: 14px;
   min-height: 760px;
   align-items: start;
 }
 
-.right-rail,
-.lower-grid {
+.right-rail {
   display: grid;
   gap: 14px;
-}
-
-.right-rail {
   position: sticky;
   top: 18px;
   height: calc(100vh - 220px);
   min-height: 760px;
   grid-template-rows: 0.9fr 1.1fr;
-}
-
-.lower-grid {
-  grid-template-columns: 1.1fr 1fr 0.9fr;
 }
 
 .panel {
@@ -328,6 +427,7 @@ h3 {
   min-height: 62px;
   padding: 12px 14px;
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
@@ -335,11 +435,23 @@ h3 {
 }
 
 .toolbar {
-  min-width: 420px;
+  flex: 1 1 300px;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .toolbar input {
-  min-width: 240px;
+  flex: 1 1 160px;
+  width: auto;
+  min-width: 140px;
+}
+
+.toolbar select {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 120px;
+  max-width: 180px;
 }
 
 .connection-panel {
@@ -347,6 +459,8 @@ h3 {
   flex-direction: column;
   height: calc(100vh - 220px);
   min-height: 760px;
+  container-type: inline-size;
+  container-name: conn;
 }
 
 .connection-table {
@@ -362,6 +476,22 @@ h3 {
   grid-template-columns: 1.1fr 1.35fr 1fr 1fr 125px 90px;
   gap: 10px;
   align-items: center;
+}
+
+/* Grid items default to min-width:auto, which lets long content force a
+   column wider in one row than in the header — cells must be shrinkable
+   for the tracks to resolve identically everywhere. */
+.connection-table__head > .sort-header-btn {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.connection-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .connection-table__head {
@@ -490,7 +620,7 @@ h3 {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 10px;
 }
 
@@ -614,6 +744,7 @@ h3 {
 .history-list strong,
 .history-list span,
 .history-list small {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -815,13 +946,38 @@ h3 {
 }
 
 @media (max-width: 1180px) {
-  .workspace,
-  .lower-grid {
-    grid-template-columns: 1fr;
+  /* Not enough room to push content aside — float the drawer over it */
+  .sidebar__drawer {
+    position: fixed;
+    left: 64px;
+    top: 0;
+    bottom: 0;
+    box-shadow: 12px 0 40px rgba(0, 0, 0, 0.45);
   }
 
   .workspace {
+    grid-template-columns: 1fr;
     min-height: 0;
+  }
+
+  .connection-panel {
+    height: auto;
+    min-height: 0;
+  }
+
+  .connection-table__body {
+    max-height: 60vh;
+  }
+
+  .right-rail {
+    position: static;
+    height: auto;
+    min-height: 0;
+    grid-template-rows: none;
+  }
+
+  .map-panel {
+    min-height: 420px;
   }
 }
 
@@ -831,28 +987,16 @@ h3 {
   }
 
   .topbar,
-  .panel__header,
-  .topbar__meta,
-  .toolbar {
+  .topbar__meta {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .toolbar {
-    min-width: 0;
   }
 
   .stat-strip {
     grid-template-columns: 1fr 1fr;
   }
 
-  .connection-table__head {
-    display: none;
-  }
-
-  .connection-row,
-  .history-list button,
-  .detail-grid {
+  .history-list button {
     grid-template-columns: 1fr;
   }
 }
@@ -1224,4 +1368,62 @@ select:focus {
   gap: 4px;
   margin-bottom: 8px;
   margin-top: -2px;
+}
+
+/* Responsive connection table — driven by the panel's own width (container
+   queries), not the viewport, so it adapts whether the squeeze comes from
+   window resizing or from the right rail taking space.
+   Columns: 1 Process · 2 Remote · 3 Local · 4 Route · 5 Transfer · 6 Seen */
+@container conn (max-width: 940px) {
+  .connection-table__head,
+  .connection-row {
+    grid-template-columns: 1.1fr 1.35fr 1fr 115px 78px;
+  }
+
+  /* Drop the Route column first; the gateway also shows in the inspector */
+  .connection-table__head > :nth-child(4),
+  .connection-row > :nth-child(4) {
+    display: none;
+  }
+
+  .sparkline,
+  .sparkline-placeholder {
+    display: none;
+  }
+}
+
+@container conn (max-width: 720px) {
+  .connection-table__head,
+  .connection-row {
+    grid-template-columns: 1.2fr 1.4fr 105px 74px;
+  }
+
+  /* Next drop Local — it's the least identifying column */
+  .connection-table__head > :nth-child(3),
+  .connection-row > :nth-child(3) {
+    display: none;
+  }
+}
+
+@container conn (max-width: 540px) {
+  /* Card layout: restore all fields, stacked two-up */
+  .connection-table__head {
+    display: none;
+  }
+
+  .connection-row {
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 10px;
+    border-color: var(--line) !important;
+  }
+
+  .connection-row > :nth-child(3),
+  .connection-row > :nth-child(4) {
+    display: block;
+  }
+
+  .connection-row .sparkline,
+  .connection-row .sparkline-placeholder {
+    display: inline-block;
+  }
 }
