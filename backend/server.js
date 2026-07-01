@@ -16,6 +16,8 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3010);
 const DATA_DIR = path.join(__dirname, 'data');
+const REPORTS_DIR = path.join(DATA_DIR, 'reports');
+fs.mkdirSync(REPORTS_DIR, { recursive: true });
 const store = openStore(path.join(DATA_DIR, 'netshield.sqlite'));
 
 let settings = store.updateSettings({});
@@ -122,6 +124,81 @@ app.post('/api/history/clear', (_req, res) => {
   res.json({ success: true });
 });
 
+// Saved trace reports: standalone HTML files kept in DATA_DIR/reports with a
+// JSON metadata sidecar per report so the list survives restarts.
+function isSafeReportId(id) {
+  return typeof id === 'string' && /^[A-Za-z0-9._-]+$/.test(id) && !id.includes('..');
+}
+
+function listReports() {
+  const reports = [];
+  for (const file of fs.readdirSync(REPORTS_DIR)) {
+    if (!file.endsWith('.json')) continue;
+    try {
+      reports.push(JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, file), 'utf8')));
+    } catch {
+      // Skip unreadable metadata rather than failing the whole list
+    }
+  }
+  return reports.sort((a, b) => String(b.generatedAt).localeCompare(String(a.generatedAt)));
+}
+
+app.get('/api/reports', (_req, res) => {
+  res.json(listReports());
+});
+
+app.post('/api/reports', (req, res) => {
+  const { html, target, generatedAt, hopCount, processName } = req.body || {};
+  if (typeof html !== 'string' || !html.trim()) return res.status(400).json({ error: 'html is required' });
+  if (typeof target !== 'string' || !target.trim()) return res.status(400).json({ error: 'target is required' });
+
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+  const safeTarget = target.replace(/[^a-zA-Z0-9.-]/g, '_');
+  let id = `netshield-trace-${safeTarget}-${stamp}`;
+  let suffix = 1;
+  while (fs.existsSync(path.join(REPORTS_DIR, `${id}.html`))) {
+    id = `netshield-trace-${safeTarget}-${stamp}-${suffix++}`;
+  }
+
+  const meta = {
+    id,
+    filename: `${id}.html`,
+    target: target.trim(),
+    generatedAt: typeof generatedAt === 'string' && generatedAt ? generatedAt : new Date().toISOString(),
+    hopCount: Number(hopCount) || 0,
+    processName: typeof processName === 'string' ? processName : '',
+    sizeBytes: Buffer.byteLength(html, 'utf8')
+  };
+  fs.writeFileSync(path.join(REPORTS_DIR, `${id}.html`), html, 'utf8');
+  fs.writeFileSync(path.join(REPORTS_DIR, `${id}.json`), JSON.stringify(meta, null, 2), 'utf8');
+  broadcast({ type: 'reports_update', reports: listReports() });
+  res.json(meta);
+});
+
+app.get('/api/reports/:id', (req, res) => {
+  if (!isSafeReportId(req.params.id)) return res.status(400).json({ error: 'invalid report id' });
+  const file = path.join(REPORTS_DIR, `${req.params.id}.html`);
+  if (!fs.existsSync(file)) return res.status(404).json({ error: 'report not found' });
+  res.type('html').sendFile(file);
+});
+
+app.get('/api/reports/:id/download', (req, res) => {
+  if (!isSafeReportId(req.params.id)) return res.status(400).json({ error: 'invalid report id' });
+  const file = path.join(REPORTS_DIR, `${req.params.id}.html`);
+  if (!fs.existsSync(file)) return res.status(404).json({ error: 'report not found' });
+  res.download(file, `${req.params.id}.html`);
+});
+
+app.delete('/api/reports/:id', (req, res) => {
+  if (!isSafeReportId(req.params.id)) return res.status(400).json({ error: 'invalid report id' });
+  const file = path.join(REPORTS_DIR, `${req.params.id}.html`);
+  if (!fs.existsSync(file)) return res.status(404).json({ error: 'report not found' });
+  fs.rmSync(file, { force: true });
+  fs.rmSync(path.join(REPORTS_DIR, `${req.params.id}.json`), { force: true });
+  broadcast({ type: 'reports_update', reports: listReports() });
+  res.json({ success: true });
+});
+
 const frontendDistPath = path.join(__dirname, '..', 'frontend', 'dist');
 if (fs.existsSync(frontendDistPath)) {
   app.use(express.static(frontendDistPath));
@@ -146,7 +223,8 @@ wss.on('connection', (ws) => {
     type: 'init',
     data: {
       ...buildState(),
-      history: store.getHistory(250)
+      history: store.getHistory(250),
+      reports: listReports()
     }
   }));
 

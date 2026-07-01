@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { EndpointMap } from './EndpointMap';
-import { exportRouteReport } from './exportRouteReport';
+import { buildRouteReport } from './exportRouteReport';
 import './App.css';
 
 type CollectorStatus = {
@@ -97,6 +97,16 @@ type ConnectionStats = {
   domains: string[];
 };
 
+type SavedReport = {
+  id: string;
+  filename: string;
+  target: string;
+  generatedAt: string;
+  hopCount: number;
+  processName: string;
+  sizeBytes: number;
+};
+
 const EMPTY_STATUS: CollectorStatus = {
   collector: 'starting',
   lastError: '',
@@ -127,6 +137,9 @@ function App() {
   const [connectionStats, setConnectionStats] = useState<Record<string, ConnectionStats>>({});
   const [investigating, setInvestigating] = useState<Record<string, boolean>>({});
   const [tracing, setTracing] = useState<Record<string, boolean>>({});
+  const [reports, setReports] = useState<SavedReport[]>([]);
+  const [savingReport, setSavingReport] = useState(false);
+  const [viewingReport, setViewingReport] = useState<SavedReport | null>(null);
   const [sortKey, setSortKey] = useState<'processName' | 'remote' | 'local' | 'interfaceAlias' | 'transfer' | 'lastSeen'>('lastSeen');
   const [sortAsc, setSortAsc] = useState(false);
   const [metricFilter, setMetricFilter] = useState<'all' | 'public' | 'processes' | 'ipv6'>('all');
@@ -166,6 +179,9 @@ function App() {
           if (payload.data.stats) {
             setConnectionStats(payload.data.stats);
           }
+          if (payload.data.reports) {
+            setReports(payload.data.reports);
+          }
           return;
         }
         if (payload.status) setStatus(payload.status);
@@ -179,6 +195,7 @@ function App() {
           setRoutes((prev) => ({ ...prev, [payload.route.target]: payload.route }));
         }
         if (payload.type === 'history_cleared') setHistory([]);
+        if (payload.type === 'reports_update') setReports(payload.reports);
       };
       ws.onclose = () => {
         setWsConnected(false);
@@ -381,6 +398,51 @@ function App() {
     setHistory([]);
   };
 
+  const saveReport = async (route: RouteTrace, connection: Connection) => {
+    setSavingReport(true);
+    try {
+      const report = buildRouteReport(route, investigations, connection);
+      const response = await fetch(getApiUrl('/api/reports'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(report)
+      });
+      const meta = await response.json();
+      if (!response.ok) {
+        console.error('Saving report failed:', meta.error || response.status);
+        return;
+      }
+      setReports((prev) => [meta, ...prev.filter((r) => r.id !== meta.id)]);
+    } catch (error) {
+      console.error('Saving report failed:', error);
+    } finally {
+      setSavingReport(false);
+    }
+  };
+
+  const deleteReport = async (id: string) => {
+    try {
+      await fetch(getApiUrl(`/api/reports/${encodeURIComponent(id)}`), { method: 'DELETE' });
+      setReports((prev) => prev.filter((r) => r.id !== id));
+      setViewingReport((prev) => (prev?.id === id ? null : prev));
+    } catch (error) {
+      console.error('Deleting report failed:', error);
+    }
+  };
+
+  const openReport = (id: string) => {
+    window.open(getApiUrl(`/api/reports/${encodeURIComponent(id)}`), '_blank', 'noopener');
+  };
+
+  const downloadReport = (id: string) => {
+    const anchor = document.createElement('a');
+    anchor.href = getApiUrl(`/api/reports/${encodeURIComponent(id)}/download`);
+    anchor.download = `${id}.html`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  };
+
   const selectedInvestigation = selectedConnection ? investigations[selectedConnection.remoteAddress] : undefined;
   const selectedRoute = selectedConnection ? routes[selectedConnection.remoteAddress] : undefined;
 
@@ -461,16 +523,36 @@ function App() {
             stats={selectedConnection ? connectionStats[selectedConnection.id] : undefined}
             investigating={selectedConnection ? !!investigating[selectedConnection.remoteAddress] : false}
             tracing={selectedConnection ? !!tracing[selectedConnection.remoteAddress] : false}
+            savingReport={savingReport}
             onInvestigate={investigate}
             onTrace={trace}
+            onSaveReport={saveReport}
           />
         </div>
       </section>
 
       <section className="lower-grid">
         <HistoryPanel history={history} onRefresh={refreshHistory} onClear={clearHistory} onSelect={setSelectedId} />
+        <ReportsPanel
+          reports={reports}
+          onView={setViewingReport}
+          onOpen={openReport}
+          onDownload={downloadReport}
+          onDelete={deleteReport}
+        />
         <SettingsPanel settings={settings} status={status} onSave={saveSettings} />
       </section>
+
+      {viewingReport && (
+        <ReportViewer
+          report={viewingReport}
+          src={getApiUrl(`/api/reports/${encodeURIComponent(viewingReport.id)}`)}
+          onOpen={openReport}
+          onDownload={downloadReport}
+          onDelete={deleteReport}
+          onClose={() => setViewingReport(null)}
+        />
+      )}
     </main>
   );
 }
@@ -844,8 +926,10 @@ function Inspector(props: {
   stats?: ConnectionStats;
   investigating: boolean;
   tracing: boolean;
+  savingReport: boolean;
   onInvestigate: (ip: string) => void;
   onTrace: (target: string) => void;
+  onSaveReport: (route: RouteTrace, connection: Connection) => void;
 }) {
   if (!props.connection) {
     return <section className="panel inspector"><div className="empty">Select a connection to inspect its process, route, and ownership.</div></section>;
@@ -871,10 +955,11 @@ function Inspector(props: {
           </button>
           {props.route && props.route.hops.length > 0 && (
             <button
-              onClick={() => exportRouteReport(props.route!, props.investigations, connection)}
-              title="Save this trace as a standalone HTML report with an interactive map"
+              onClick={() => props.onSaveReport(props.route!, connection)}
+              disabled={props.savingReport}
+              title="Save this trace to the report library as a standalone HTML report with an interactive map"
             >
-              Export trace
+              {props.savingReport ? 'Saving…' : 'Save report'}
             </button>
           )}
         </div>
@@ -1000,6 +1085,151 @@ function HistoryPanel(props: { history: Connection[]; onRefresh: () => void; onC
         ))}
       </div>
     </section>
+  );
+}
+
+function ReportsPanel(props: {
+  reports: SavedReport[];
+  onView: (report: SavedReport) => void;
+  onOpen: (id: string) => void;
+  onDownload: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [confirmingDelete, setConfirmingDelete] = useState('');
+
+  const filtered = useMemo(() => {
+    const term = search.toLowerCase().trim();
+    if (!term) return props.reports;
+    return props.reports.filter((report) =>
+      [report.target, report.processName, report.filename].some((value) => value.toLowerCase().includes(term))
+    );
+  }, [props.reports, search]);
+
+  const handleDelete = (id: string) => {
+    if (confirmingDelete === id) {
+      setConfirmingDelete('');
+      props.onDelete(id);
+    } else {
+      setConfirmingDelete(id);
+    }
+  };
+
+  return (
+    <section className="panel reports-panel">
+      <div className="panel__header">
+        <div>
+          <h2>Trace reports</h2>
+          <p>
+            {props.reports.length} saved {props.reports.length === 1 ? 'report' : 'reports'}
+            {search && ` · ${filtered.length} matching`}
+          </p>
+        </div>
+        {props.reports.length > 0 && (
+          <input
+            className="reports-search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Target, process…"
+          />
+        )}
+      </div>
+      <div className="reports-list">
+        {props.reports.length === 0 && (
+          <div className="empty">No saved reports yet. Trace a route, then use Save report to keep it here.</div>
+        )}
+        {props.reports.length > 0 && filtered.length === 0 && (
+          <div className="empty">No reports match “{search}”.</div>
+        )}
+        {filtered.map((report) => (
+          <div key={report.id} className="report-row">
+            <button
+              type="button"
+              className="report-row__info"
+              onClick={() => props.onView(report)}
+              title="View this report in the dashboard"
+            >
+              <strong title={report.filename}>{report.target}</strong>
+              <small>
+                {[
+                  report.processName,
+                  `${report.hopCount} ${report.hopCount === 1 ? 'hop' : 'hops'}`,
+                  formatDate(report.generatedAt),
+                  formatBytes(report.sizeBytes)
+                ].filter(Boolean).join(' · ')}
+              </small>
+            </button>
+            <div className="report-row__actions">
+              <button onClick={() => props.onView(report)} title="View the report inside the dashboard">View</button>
+              <button onClick={() => props.onOpen(report.id)} title="Open the report in a new tab">↗</button>
+              <button onClick={() => props.onDownload(report.id)} title="Download the report as an HTML file">⬇</button>
+              <button
+                className={`report-delete ${confirmingDelete === report.id ? 'is-confirming' : ''}`}
+                onClick={() => handleDelete(report.id)}
+                onBlur={() => setConfirmingDelete((prev) => (prev === report.id ? '' : prev))}
+                title={confirmingDelete === report.id ? 'Click again to permanently delete' : 'Delete this report'}
+              >
+                {confirmingDelete === report.id ? 'Sure?' : '✕'}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ReportViewer(props: {
+  report: SavedReport;
+  src: string;
+  onOpen: (id: string) => void;
+  onDownload: (id: string) => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const report = props.report;
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') props.onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [props.onClose]);
+
+  return (
+    <div className="report-viewer__backdrop" onClick={props.onClose}>
+      <div className="report-viewer" onClick={(event) => event.stopPropagation()}>
+        <div className="report-viewer__header">
+          <div className="report-viewer__title">
+            <strong>{report.target}</strong>
+            <small>
+              {[
+                report.processName,
+                `${report.hopCount} ${report.hopCount === 1 ? 'hop' : 'hops'}`,
+                formatDate(report.generatedAt),
+                formatBytes(report.sizeBytes)
+              ].filter(Boolean).join(' · ')}
+            </small>
+          </div>
+          <div className="report-viewer__actions">
+            <button onClick={() => props.onOpen(report.id)} title="Open in a new tab">Open in tab</button>
+            <button onClick={() => props.onDownload(report.id)} title="Download as an HTML file">Download</button>
+            <button
+              className={`report-delete ${confirmingDelete ? 'is-confirming' : ''}`}
+              onClick={() => (confirmingDelete ? props.onDelete(report.id) : setConfirmingDelete(true))}
+              onBlur={() => setConfirmingDelete(false)}
+              title={confirmingDelete ? 'Click again to permanently delete' : 'Delete this report'}
+            >
+              {confirmingDelete ? 'Delete forever?' : 'Delete'}
+            </button>
+            <button className="report-viewer__close" onClick={props.onClose} title="Close (Esc)">✕</button>
+          </div>
+        </div>
+        <iframe className="report-viewer__frame" src={props.src} title={`Trace report for ${report.target}`} sandbox="allow-scripts allow-popups" />
+      </div>
+    </div>
   );
 }
 

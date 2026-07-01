@@ -1,4 +1,4 @@
-// Builds a self-contained HTML trace report and triggers a download.
+// Builds a self-contained HTML trace report for the backend report library.
 // The report embeds the hop + investigation data as JSON and renders its own
 // Leaflet map (loaded from CDN), so the saved file works standalone — each
 // hop is clickable to inspect ownership, DNS, and location details.
@@ -41,11 +41,20 @@ type ReportConnection = {
   pid: number;
 } | null;
 
-export function exportRouteReport(
+export type BuiltRouteReport = {
+  html: string;
+  target: string;
+  generatedAt: string;
+  hopCount: number;
+  processName: string;
+};
+
+// Builds the report HTML plus the metadata the backend report library stores.
+export function buildRouteReport(
   route: ReportRoute,
   investigations: Record<string, ReportInvestigation>,
   connection: ReportConnection
-) {
+): BuiltRouteReport {
   const hopData = route.hops.map((hop) => {
     const inv = hop.address ? investigations[hop.address] : undefined;
     return {
@@ -83,17 +92,13 @@ export function exportRouteReport(
     hops: hopData,
   };
 
-  const html = buildReportHtml(payload);
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-  anchor.href = url;
-  anchor.download = `netshield-trace-${route.target.replace(/[^a-zA-Z0-9.-]/g, '_')}-${stamp}.html`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
+  return {
+    html: buildReportHtml(payload),
+    target: route.target,
+    generatedAt: payload.generatedAt,
+    hopCount: route.hops.length,
+    processName: connection?.processName || ''
+  };
 }
 
 function buildReportHtml(payload: unknown) {
