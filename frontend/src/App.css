@@ -187,18 +187,12 @@ h3 {
   gap: 10px;
 }
 
-.metric,
 .panel {
   background: rgba(16, 26, 32, 0.94);
   border: 1px solid var(--line);
   border-radius: 8px;
 }
 
-.metric {
-  padding: 12px 14px;
-}
-
-.metric span,
 .panel__header p,
 .muted,
 .map-caption {
@@ -206,11 +200,75 @@ h3 {
   font-size: 0.82rem;
 }
 
-.metric strong {
+/* Metric Cards style */
+.metric-card {
+  background: rgba(20, 32, 40, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  min-height: 80px;
+  color: var(--text);
+}
+
+.metric-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: transparent;
+  transition: background-color 0.25s ease;
+}
+
+.metric-card:hover {
+  background: rgba(26, 44, 55, 0.7);
+  border-color: var(--line-bright);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.metric-card:active {
+  transform: translateY(0);
+}
+
+.metric-card.is-active {
+  background: rgba(65, 199, 215, 0.08);
+  border-color: var(--cyan);
+  box-shadow: 0 4px 15px rgba(65, 199, 215, 0.15);
+}
+
+.metric-card.is-active::before {
+  background: var(--cyan);
+}
+
+.metric-card.is-active .metric-value {
+  color: var(--cyan);
+  text-shadow: 0 0 10px rgba(65, 199, 215, 0.3);
+}
+
+.metric-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.metric-value {
   display: block;
-  margin-top: 6px;
+  margin-top: 8px;
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 1.45rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  transition: color 0.25s ease;
 }
 
 .workspace {
@@ -300,21 +358,30 @@ h3 {
 .connection-row {
   width: 100%;
   text-align: left;
-  border-color: transparent;
+  border: 1px solid transparent !important;
+  min-height: auto !important;
+  transform: none !important;
   background: transparent;
   border-radius: 6px;
   padding: 10px 8px;
   color: var(--text);
+  position: relative;
+  transition: background-color 0.15s, border-color 0.15s;
 }
 
 .connection-row:nth-child(even) {
   background: rgba(19, 36, 43, 0.4);
 }
 
-.connection-row:hover,
-.connection-row.is-selected {
+.connection-row:hover {
   background: #13242b;
-  border-color: var(--line-bright);
+  border-color: var(--line-bright) !important;
+}
+
+.connection-row.is-selected {
+  background: rgba(65, 199, 215, 0.08) !important;
+  border-color: rgba(65, 199, 215, 0.4) !important;
+  box-shadow: inset 3px 0 0 var(--cyan);
 }
 
 .connection-row strong,
@@ -599,3 +666,194 @@ h3 {
   }
 }
 .leaflet-container { background: #071014; } .dark-popup .leaflet-popup-content-wrapper { background: #13252d; color: #edf7f8; } .dark-popup .leaflet-popup-tip { background: #13252d; }
+
+/* Dynamic sorting headers */
+.sort-header-btn {
+  background: transparent;
+  border: none;
+  color: var(--faint);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem;
+  padding: 0;
+  text-transform: uppercase;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+  min-height: auto;
+  border-radius: 0;
+  width: 100%;
+}
+.sort-header-btn:hover {
+  color: var(--cyan);
+  border-color: transparent !important;
+}
+.sort-header-btn.is-active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Active filter badge styling */
+.active-filter-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(65, 199, 215, 0.15);
+  color: var(--cyan);
+  border: 1px solid rgba(65, 199, 215, 0.3);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.75rem;
+  margin-left: 8px;
+  font-weight: 600;
+}
+
+.clear-filter-inline {
+  background: transparent;
+  border: none;
+  color: var(--cyan);
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font-size: 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: auto;
+}
+.clear-filter-inline:hover {
+  color: var(--text);
+  border-color: transparent !important;
+}
+
+/* Process tag colors */
+.process-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.process-badge {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.process-badge.process-system {
+  color: var(--faint);
+}
+.process-badge.process-service {
+  color: var(--muted);
+}
+.process-badge.process-user {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Connection state styling */
+.state-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.state-dot.state-established {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.state-dot.state-listening {
+  background: var(--cyan);
+  box-shadow: 0 0 6px var(--cyan);
+}
+.state-dot.state-waiting,
+.state-dot.state-closing {
+  background: var(--amber);
+}
+
+/* Network bytes transfer column */
+.transfer-cell {
+  display: flex;
+  flex-direction: column;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.8rem;
+}
+.transfer-cell .tx,
+.transfer-cell .rx {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.transfer-cell .tx {
+  color: var(--cyan);
+}
+.transfer-cell .rx {
+  color: var(--green);
+}
+.transfer-cell .arrow {
+  font-size: 0.65rem;
+}
+
+/* Timeline Route trace path */
+.route-view {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.route-view::before {
+  content: '';
+  position: absolute;
+  top: 48px;
+  left: 20px;
+  bottom: 24px;
+  width: 1px;
+  border-left: 1px dashed var(--line);
+  z-index: 0;
+}
+.hop {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px 1fr 86px;
+  gap: 12px;
+  align-items: center;
+  z-index: 1;
+}
+.hop span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
+  font-size: 0.65rem;
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: bold;
+}
+
+/* World Map circles transition */
+svg circle {
+  transition: r 0.2s ease, opacity 0.2s ease, fill 0.2s ease;
+}
+svg circle:hover {
+  opacity: 1 !important;
+}
+
+/* Input Focus Glow */
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px rgba(65, 199, 215, 0.15);
+}
+
+/* Settings button spacing and panel alignment */
+.settings-panel label {
+  margin-bottom: 8px;
+}

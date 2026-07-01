@@ -126,6 +126,9 @@ function App() {
   const [connectionStats, setConnectionStats] = useState<Record<string, ConnectionStats>>({});
   const [investigating, setInvestigating] = useState<Record<string, boolean>>({});
   const [tracing, setTracing] = useState<Record<string, boolean>>({});
+  const [sortKey, setSortKey] = useState<'processName' | 'remote' | 'local' | 'interfaceAlias' | 'transfer' | 'lastSeen'>('lastSeen');
+  const [sortAsc, setSortAsc] = useState(false);
+  const [metricFilter, setMetricFilter] = useState<'all' | 'public' | 'processes' | 'ipv6'>('all');
   const wsRef = useRef<WebSocket | null>(null);
 
   const getApiUrl = (path: string) => {
@@ -215,12 +218,43 @@ function App() {
     [connections]
   );
 
+  const handleSort = (key: typeof sortKey) => {
+    if (sortKey === key) {
+      setSortAsc((prev) => !prev);
+    } else {
+      setSortKey(key);
+      setSortAsc(key === 'processName' || key === 'remote' || key === 'local' || key === 'interfaceAlias');
+    }
+  };
+
   const filteredConnections = useMemo(() => {
     const term = filter.toLowerCase().trim();
-    return connections
-      .filter((connection) => processFilter === 'all' || connection.processName === processFilter)
-      .filter((connection) => {
-        if (!term) return true;
+    let result = connections;
+
+    // Apply process filter
+    if (processFilter !== 'all') {
+      result = result.filter((connection) => connection.processName === processFilter);
+    }
+
+    // Apply metric filter
+    if (metricFilter === 'public') {
+      result = result.filter((connection) => !isLocalAddress(connection.remoteAddress));
+    } else if (metricFilter === 'ipv6') {
+      result = result.filter((connection) => connection.remoteAddress.includes(':'));
+    } else if (metricFilter === 'processes') {
+      const seenProcesses = new Set<string>();
+      result = result.filter((connection) => {
+        if (seenProcesses.has(connection.processName)) {
+          return false;
+        }
+        seenProcesses.add(connection.processName);
+        return true;
+      });
+    }
+
+    // Apply text filter
+    if (term) {
+      result = result.filter((connection) => {
         return [
           connection.remoteAddress,
           String(connection.remotePort),
@@ -229,9 +263,49 @@ function App() {
           connection.interfaceAlias,
           connection.gateway
         ].some((value) => value.toLowerCase().includes(term));
-      })
-      .sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
-  }, [connections, filter, processFilter]);
+      });
+    }
+
+    // Apply sorting
+    result.sort((a, b) => {
+      let comparison = 0;
+      switch (sortKey) {
+        case 'processName':
+          comparison = a.processName.localeCompare(b.processName);
+          break;
+        case 'remote':
+          comparison = a.remoteAddress.localeCompare(b.remoteAddress);
+          if (comparison === 0) {
+            comparison = a.remotePort - b.remotePort;
+          }
+          break;
+        case 'local':
+          comparison = a.localAddress.localeCompare(b.localAddress);
+          if (comparison === 0) {
+            comparison = a.localPort - b.localPort;
+          }
+          break;
+        case 'interfaceAlias':
+          comparison = (a.interfaceAlias || '').localeCompare(b.interfaceAlias || '');
+          break;
+        case 'transfer': {
+          const statsA = connectionStats[a.id];
+          const statsB = connectionStats[b.id];
+          const totalA = (statsA?.bytesOut || 0) + (statsA?.bytesIn || 0);
+          const totalB = (statsB?.bytesOut || 0) + (statsB?.bytesIn || 0);
+          comparison = totalA - totalB;
+          break;
+        }
+        case 'lastSeen':
+        default:
+          comparison = new Date(a.lastSeen).getTime() - new Date(b.lastSeen).getTime();
+          break;
+      }
+      return sortAsc ? comparison : -comparison;
+    });
+
+    return result;
+  }, [connections, filter, processFilter, metricFilter, sortKey, sortAsc, connectionStats]);
 
   const stats = useMemo(() => {
     const publicCount = connections.filter((connection) => !isLocalAddress(connection.remoteAddress)).length;
@@ -325,10 +399,30 @@ function App() {
       {status.lastError && <div className="error-strip">{status.lastError}</div>}
 
       <section className="stat-strip">
-        <Metric label="Active TCP sessions" value={stats.active} />
-        <Metric label="Public endpoints" value={stats.publicCount} />
-        <Metric label="Processes" value={stats.processes} />
-        <Metric label="IPv6 sessions" value={stats.ipv6} />
+        <Metric
+          label="Active TCP sessions"
+          value={stats.active}
+          isActive={metricFilter === 'all'}
+          onClick={() => setMetricFilter('all')}
+        />
+        <Metric
+          label="Public endpoints"
+          value={stats.publicCount}
+          isActive={metricFilter === 'public'}
+          onClick={() => setMetricFilter('public')}
+        />
+        <Metric
+          label="Processes"
+          value={stats.processes}
+          isActive={metricFilter === 'processes'}
+          onClick={() => setMetricFilter('processes')}
+        />
+        <Metric
+          label="IPv6 sessions"
+          value={stats.ipv6}
+          isActive={metricFilter === 'ipv6'}
+          onClick={() => setMetricFilter('ipv6')}
+        />
       </section>
 
       <section className="workspace">
@@ -343,6 +437,11 @@ function App() {
           onProcessFilter={setProcessFilter}
           onSelect={setSelectedId}
           onInvestigate={investigate}
+          sortKey={sortKey}
+          sortAsc={sortAsc}
+          onSort={handleSort}
+          metricFilter={metricFilter}
+          onClearMetricFilter={() => setMetricFilter('all')}
         />
 
         <div className="right-rail">
@@ -384,12 +483,26 @@ function StatusPill({ status, connected }: { status: CollectorStatus['collector'
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({
+  label,
+  value,
+  isActive,
+  onClick
+}: {
+  label: string;
+  value: number;
+  isActive: boolean;
+  onClick: () => void;
+}) {
   return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value.toLocaleString()}</strong>
-    </div>
+    <button
+      type="button"
+      className={`metric-card ${isActive ? 'is-active' : ''}`}
+      onClick={onClick}
+    >
+      <span className="metric-label">{label}</span>
+      <strong className="metric-value">{value.toLocaleString()}</strong>
+    </button>
   );
 }
 
@@ -404,13 +517,33 @@ function ConnectionTable(props: {
   onProcessFilter: (value: string) => void;
   onSelect: (id: string) => void;
   onInvestigate: (ip: string) => void;
+  sortKey: 'processName' | 'remote' | 'local' | 'interfaceAlias' | 'transfer' | 'lastSeen';
+  sortAsc: boolean;
+  onSort: (key: 'processName' | 'remote' | 'local' | 'interfaceAlias' | 'transfer' | 'lastSeen') => void;
+  metricFilter: 'all' | 'public' | 'processes' | 'ipv6';
+  onClearMetricFilter: () => void;
 }) {
   return (
     <section className="panel connection-panel">
       <div className="panel__header">
         <div>
           <h2>Live TCP sessions</h2>
-          <p>{props.connections.length} matching sessions</p>
+          <p>
+            {props.connections.length} matching sessions
+            {props.metricFilter !== 'all' && (
+              <span className="active-filter-badge">
+                {props.metricFilter === 'public' ? 'Public' : props.metricFilter === 'ipv6' ? 'IPv6' : 'Processes (Grouped)'}
+                <button
+                  type="button"
+                  className="clear-filter-inline"
+                  onClick={props.onClearMetricFilter}
+                  title="Clear metric filter"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+          </p>
         </div>
         <div className="toolbar">
           <input value={props.filter} onChange={(event) => props.onFilter(event.target.value)} placeholder="IP, port, process, adapter" />
@@ -422,12 +555,48 @@ function ConnectionTable(props: {
       </div>
       <div className="connection-table">
         <div className="connection-table__head">
-          <span>Process</span>
-          <span>Remote endpoint</span>
-          <span>Local</span>
-          <span>Route</span>
-          <span>Transfer</span>
-          <span>Seen</span>
+          <button
+            type="button"
+            className={`sort-header-btn ${props.sortKey === 'processName' ? 'is-active' : ''}`}
+            onClick={() => props.onSort('processName')}
+          >
+            Process {props.sortKey === 'processName' && (props.sortAsc ? '▲' : '▼')}
+          </button>
+          <button
+            type="button"
+            className={`sort-header-btn ${props.sortKey === 'remote' ? 'is-active' : ''}`}
+            onClick={() => props.onSort('remote')}
+          >
+            Remote endpoint {props.sortKey === 'remote' && (props.sortAsc ? '▲' : '▼')}
+          </button>
+          <button
+            type="button"
+            className={`sort-header-btn ${props.sortKey === 'local' ? 'is-active' : ''}`}
+            onClick={() => props.onSort('local')}
+          >
+            Local {props.sortKey === 'local' && (props.sortAsc ? '▲' : '▼')}
+          </button>
+          <button
+            type="button"
+            className={`sort-header-btn ${props.sortKey === 'interfaceAlias' ? 'is-active' : ''}`}
+            onClick={() => props.onSort('interfaceAlias')}
+          >
+            Route {props.sortKey === 'interfaceAlias' && (props.sortAsc ? '▲' : '▼')}
+          </button>
+          <button
+            type="button"
+            className={`sort-header-btn ${props.sortKey === 'transfer' ? 'is-active' : ''}`}
+            onClick={() => props.onSort('transfer')}
+          >
+            Transfer {props.sortKey === 'transfer' && (props.sortAsc ? '▲' : '▼')}
+          </button>
+          <button
+            type="button"
+            className={`sort-header-btn ${props.sortKey === 'lastSeen' ? 'is-active' : ''}`}
+            onClick={() => props.onSort('lastSeen')}
+          >
+            Seen {props.sortKey === 'lastSeen' && (props.sortAsc ? '▲' : '▼')}
+          </button>
         </div>
         <div className="connection-table__body">
           {props.connections.length === 0 && <div className="empty">No active TCP sessions match the current filters.</div>}
@@ -436,26 +605,39 @@ function ConnectionTable(props: {
             return (
             <button
               key={connection.id}
+              type="button"
               className={`connection-row ${props.selectedId === connection.id ? 'is-selected' : ''}`}
               onClick={() => props.onSelect(connection.id)}
               onDoubleClick={() => props.onInvestigate(connection.remoteAddress)}
             >
               <span>
-                <strong>{connection.processName} <CopyButton text={connection.processName} /></strong>
+                <strong className="process-name-cell">
+                  <span className={`process-badge ${getProcessTypeClass(connection.processName)}`}>
+                    {connection.processName}
+                  </span>
+                  <CopyButton text={connection.processName} />
+                </strong>
                 <small>PID {connection.pid}</small>
               </span>
               <span>
                 <strong title={`${connection.remoteAddress}:${connection.remotePort}`}>{formatEndpoint(connection.remoteAddress, connection.remotePort)} <CopyButton text={`${connection.remoteAddress}:${connection.remotePort}`} /></strong>
-                <small>{connection.state}</small>
+                <small className="state-cell">
+                  <span className={`state-dot ${getStateBadgeClass(connection.state)}`} />
+                  {connection.state}
+                </small>
               </span>
               <span title={`${connection.localAddress}:${connection.localPort}`}>{formatEndpoint(connection.localAddress, connection.localPort)}</span>
               <span>
                 <strong>{connection.interfaceAlias || 'Unknown adapter'}</strong>
                 <small>{connection.gateway || 'No gateway'}</small>
               </span>
-              <span>
-                <strong>{formatBytes(s?.bytesOut || 0)} <span style={{color:'var(--cyan)'}}>▲</span></strong>
-                <small>{formatBytes(s?.bytesIn || 0)} <span style={{color:'var(--green)'}}>▼</span></small>
+              <span className="transfer-cell">
+                <span className="tx" title="Sent (Bytes Out)">
+                  <span className="arrow">▲</span> {formatBytes(s?.bytesOut || 0)}
+                </span>
+                <span className="rx" title="Received (Bytes In)">
+                  <span className="arrow">▼</span> {formatBytes(s?.bytesIn || 0)}
+                </span>
               </span>
               <span>{formatTime(connection.lastSeen)}</span>
             </button>
@@ -506,6 +688,7 @@ function WorldMap(props: {
               stroke="var(--green, #58d68d)" 
               strokeWidth="2" 
               strokeDasharray="5, 10" 
+              vectorEffect="non-scaling-stroke"
             />
           )}
           {routePoints.map((investigation, index) => {
@@ -518,6 +701,7 @@ function WorldMap(props: {
                 r={4}
                 fill="var(--green, #58d68d)"
                 opacity={0.8}
+                vectorEffect="non-scaling-stroke"
               />
             );
           })}
@@ -536,6 +720,7 @@ function WorldMap(props: {
                 strokeWidth={isSelected ? 2 : 1}
                 style={{ cursor: 'pointer', transition: 'all 0.2s ease-in-out' }}
                 onClick={() => props.onSelect(connection)}
+                vectorEffect="non-scaling-stroke"
               >
                 <title>{connection.remoteAddress}&#10;{investigation.geo.city ? `${investigation.geo.city}, ${investigation.geo.country}` : investigation.geo.country}</title>
               </circle>
@@ -842,6 +1027,24 @@ function CopyButton({ text }: { text: string }) {
       {copied ? '✓' : '⧉'}
     </button>
   );
+}
+
+function getProcessTypeClass(name: string) {
+  if (!name) return 'process-unknown';
+  const lower = name.toLowerCase();
+  if (lower === 'system' || lower === 'idle') return 'process-system';
+  if (lower.includes('svchost') || lower === 'lsass.exe' || lower === 'services.exe') return 'process-service';
+  return 'process-user';
+}
+
+function getStateBadgeClass(state: string) {
+  if (!state) return '';
+  const lower = state.toLowerCase();
+  if (lower === 'established') return 'state-established';
+  if (lower === 'listen' || lower === 'listening') return 'state-listening';
+  if (lower.includes('wait')) return 'state-waiting';
+  if (lower.includes('close') || lower.includes('time')) return 'state-closing';
+  return 'state-other';
 }
 
 export default App;
