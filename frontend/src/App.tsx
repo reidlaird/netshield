@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { EndpointMap } from './EndpointMap';
+import { exportRouteReport } from './exportRouteReport';
 import './App.css';
 
 type CollectorStatus = {
@@ -868,6 +869,14 @@ function Inspector(props: {
           <button onClick={() => props.onTrace(connection.remoteAddress)} disabled={props.tracing}>
             {props.tracing ? 'Tracing…' : 'Trace route'}
           </button>
+          {props.route && props.route.hops.length > 0 && (
+            <button
+              onClick={() => exportRouteReport(props.route!, props.investigations, connection)}
+              title="Save this trace as a standalone HTML report with an interactive map"
+            >
+              Export trace
+            </button>
+          )}
         </div>
       </div>
       <div className="detail-grid">
