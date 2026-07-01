@@ -188,9 +188,31 @@ h3 {
 }
 
 .panel {
-  background: rgba(16, 26, 32, 0.94);
-  border: 1px solid var(--line);
+  background: rgba(16, 26, 32, 0.82);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(38, 57, 66, 0.6);
   border-radius: 8px;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.panel:hover {
+  border-color: rgba(65, 199, 215, 0.25);
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--line-bright);
 }
 
 .panel__header p,
@@ -337,7 +359,7 @@ h3 {
 .connection-table__head,
 .connection-row {
   display: grid;
-  grid-template-columns: 1.1fr 1.35fr 1fr 1fr 90px 90px;
+  grid-template-columns: 1.1fr 1.35fr 1fr 1fr 125px 90px;
   gap: 10px;
   align-items: center;
 }
@@ -769,19 +791,31 @@ h3 {
   align-items: center;
   gap: 6px;
 }
+@keyframes pulse-established {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(88, 214, 141, 0.6); }
+  70% { transform: scale(1.15); box-shadow: 0 0 0 5px rgba(88, 214, 141, 0); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(88, 214, 141, 0); }
+}
+@keyframes pulse-listening {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(65, 199, 215, 0.5); }
+  70% { transform: scale(1.15); box-shadow: 0 0 0 5px rgba(65, 199, 215, 0); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(65, 199, 215, 0); }
+}
 .state-dot {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--faint);
+  display: inline-block;
+  transition: transform 0.2s ease;
 }
 .state-dot.state-established {
   background: var(--green);
-  box-shadow: 0 0 6px var(--green);
+  animation: pulse-established 2s infinite;
 }
 .state-dot.state-listening {
   background: var(--cyan);
-  box-shadow: 0 0 6px var(--cyan);
+  animation: pulse-listening 3s infinite;
 }
 .state-dot.state-waiting,
 .state-dot.state-closing {
@@ -791,9 +825,23 @@ h3 {
 /* Network bytes transfer column */
 .transfer-cell {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.8rem;
+}
+.transfer-cell__text {
+  display: flex;
+  flex-direction: column;
+}
+.sparkline {
+  display: inline-block;
+  opacity: 0.85;
+}
+.sparkline-placeholder {
+  width: 45px;
+  height: 14px;
+  display: inline-block;
 }
 .transfer-cell .tx,
 .transfer-cell .rx {
@@ -822,17 +870,17 @@ h3 {
   content: '';
   position: absolute;
   top: 48px;
-  left: 20px;
+  left: 24px;
   bottom: 24px;
-  width: 1px;
-  border-left: 1px dashed var(--line);
+  width: 2px;
+  background: linear-gradient(to bottom, var(--cyan) 0%, rgba(65, 199, 215, 0.15) 100%);
   z-index: 0;
 }
 .hop {
   position: relative;
   display: grid;
-  grid-template-columns: 28px 1fr 86px;
-  gap: 12px;
+  grid-template-columns: 20px 1fr 86px;
+  gap: 16px;
   align-items: center;
   z-index: 1;
 }
@@ -840,15 +888,61 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 2px solid var(--cyan);
+  color: var(--text);
+  font-size: 0.68rem;
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: bold;
+  box-shadow: 0 0 8px rgba(65, 199, 215, 0.4);
+  justify-self: center;
+}
+.hop.hop--timeout span {
+  border-color: var(--amber);
+  color: var(--amber);
+  box-shadow: 0 0 8px rgba(240, 180, 81, 0.4);
+}
+.hop.hop--timeout strong {
+  color: var(--amber);
+}
+
+/* Animate traceroute dashes. Hop order runs this PC -> remote endpoint, so a
+   positive dash offset moves the dashes toward the path start: traffic reads
+   as flowing from the remote source back to this machine. */
+.leaflet-container svg path.route-flow {
+  animation: route-flow 1.6s linear infinite;
+}
+@keyframes route-flow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 32;
+  }
+}
+
+/* Numbered hop badges on the endpoint map */
+.hop-badge-wrap {
+  background: transparent;
+  border: none;
+}
+.hop-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--surface);
-  border: 1px solid var(--cyan);
+  border: 1.5px solid var(--cyan);
+  background: rgba(7, 16, 20, 0.9);
   color: var(--cyan);
-  font-size: 0.65rem;
-  font-family: 'IBM Plex Mono', monospace;
-  font-weight: bold;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 0 6px rgba(65, 199, 215, 0.35);
 }
 
 /* World Map circles transition */
@@ -870,4 +964,109 @@ select:focus {
 /* Settings button spacing and panel alignment */
 .settings-panel label {
   margin-bottom: 8px;
+}
+
+/* Anomaly Warning Badges */
+.anomaly-badge {
+  background: rgba(240, 180, 81, 0.12);
+  color: var(--amber);
+  border: 1px solid rgba(240, 180, 81, 0.3);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px rgba(240, 180, 81, 0.1);
+}
+
+/* Process Grouping Rollup Styles */
+.toggle-group-btn {
+  font-size: 0.78rem;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(20, 32, 40, 0.6);
+  border-color: var(--line);
+  transition: all 0.2s ease;
+  min-height: 34px;
+}
+.toggle-group-btn:hover {
+  border-color: var(--line-bright);
+}
+.toggle-group-btn.is-active {
+  background: rgba(65, 199, 215, 0.12);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.process-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(22, 36, 44, 0.45);
+  padding: 10px 14px;
+  margin: 6px 0;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid rgba(38, 57, 66, 0.4);
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.process-group-header:hover {
+  background: rgba(22, 36, 44, 0.85);
+  border-color: rgba(65, 199, 215, 0.3);
+}
+.process-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.process-group-title .chevron {
+  color: var(--cyan);
+  font-size: 0.65rem;
+  width: 12px;
+  display: inline-block;
+  text-align: center;
+}
+.process-group-count {
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: rgba(65, 199, 215, 0.08);
+  padding: 1px 6px;
+  border-radius: 99px;
+  border: 1px solid rgba(65, 199, 215, 0.2);
+}
+.process-group-line {
+  flex: 1;
+  height: 1px;
+  border-top: 1px dashed var(--line);
+  margin: 0 16px;
+  opacity: 0.35;
+}
+.process-group-transfer {
+  display: flex;
+  gap: 12px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.78rem;
+}
+.process-group-transfer span:first-child {
+  color: var(--cyan);
+}
+.process-group-transfer span:last-child {
+  color: var(--green);
+}
+.process-group-children {
+  padding-left: 8px;
+  border-left: 1px dashed var(--line);
+  margin-left: 19px;
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+  margin-top: -2px;
 }

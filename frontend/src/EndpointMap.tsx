@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { MapContainer, TileLayer, CircleMarker, Polyline, Tooltip, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
 export type MapPoint = {
@@ -12,8 +13,12 @@ export type MapPoint = {
 };
 
 export type RoutePoint = {
+  hop: number;
   latitude: number;
   longitude: number;
+  label: string;
+  sublabel?: string;
+  latency?: string;
 };
 
 function FlyToSelected({ point }: { point?: MapPoint }) {
@@ -28,12 +33,46 @@ function FlyToSelected({ point }: { point?: MapPoint }) {
   return null;
 }
 
+function FitRoute({ points }: { points: RoutePoint[] }) {
+  const map = useMap();
+  const signature = points.map((point) => `${point.latitude},${point.longitude}`).join('|');
+  useEffect(() => {
+    if (points.length < 2) return;
+    const bounds = L.latLngBounds(points.map((point) => [point.latitude, point.longitude] as [number, number]));
+    map.flyToBounds(bounds, { padding: [40, 40], duration: 0.8, maxZoom: 8 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, signature]);
+  return null;
+}
+
+// Hop 1 sits nearest this PC, the last hop is the remote endpoint. Blend
+// segment colors from cyan (local side) to amber (remote side) so the
+// direction of the path reads at a glance.
+const LOCAL_COLOR: [number, number, number] = [65, 199, 215];
+const REMOTE_COLOR: [number, number, number] = [240, 180, 81];
+
+function segmentColor(t: number) {
+  const mix = LOCAL_COLOR.map((channel, i) => Math.round(channel + (REMOTE_COLOR[i] - channel) * t));
+  return `rgb(${mix[0]}, ${mix[1]}, ${mix[2]})`;
+}
+
+function hopIcon(hop: number, t: number) {
+  return L.divIcon({
+    className: 'hop-badge-wrap',
+    html: `<span class="hop-badge" style="border-color:${segmentColor(t)};color:${segmentColor(t)}">${hop}</span>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  });
+}
+
 export function EndpointMap(props: {
   points: MapPoint[];
   routePoints: RoutePoint[];
   onSelect: (id: string) => void;
 }) {
   const selected = props.points.find((point) => point.selected);
+  const hops = props.routePoints;
+  const maxIndex = Math.max(hops.length - 1, 1);
 
   return (
     <MapContainer
@@ -51,19 +90,41 @@ export function EndpointMap(props: {
         maxZoom={19}
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
       />
-      {props.routePoints.length > 1 && (
-        <Polyline
-          positions={props.routePoints.map((hop) => [hop.latitude, hop.longitude] as [number, number])}
-          pathOptions={{ color: '#58d68d', weight: 2, dashArray: '5 10', opacity: 0.9 }}
-        />
-      )}
-      {props.routePoints.map((hop, index) => (
-        <CircleMarker
-          key={`hop-${index}`}
-          center={[hop.latitude, hop.longitude]}
-          radius={4}
-          pathOptions={{ color: '#58d68d', fillColor: '#58d68d', fillOpacity: 0.8, weight: 1 }}
-        />
+      {hops.slice(1).map((hop, index) => {
+        const previous = hops[index];
+        const t = (index + 0.5) / maxIndex;
+        return (
+          <Polyline
+            key={`segment-${index}`}
+            positions={[
+              [previous.latitude, previous.longitude],
+              [hop.latitude, hop.longitude],
+            ]}
+            pathOptions={{
+              color: segmentColor(t),
+              weight: 2.5,
+              dashArray: '6 10',
+              opacity: 0.9,
+              className: 'route-flow',
+            }}
+          />
+        );
+      })}
+      {hops.map((hop, index) => (
+        <Marker
+          key={`hop-${hop.hop}`}
+          position={[hop.latitude, hop.longitude]}
+          icon={hopIcon(hop.hop, index / maxIndex)}
+        >
+          <Tooltip direction="top" offset={[0, -10]}>
+            <div className="map-tooltip__title">Hop {hop.hop} · {hop.label}</div>
+            {hop.sublabel && <div className="map-tooltip__sub">{hop.sublabel}</div>}
+            {hop.latency && <div className="map-tooltip__sub">{hop.latency}</div>}
+            <div className="map-tooltip__sub">
+              {index === 0 ? 'Closest to this PC' : index === hops.length - 1 ? 'Remote endpoint' : `${hops.length - 1 - index} hop${hops.length - 1 - index === 1 ? '' : 's'} from the endpoint`}
+            </div>
+          </Tooltip>
+        </Marker>
       ))}
       {props.points.map((point) => {
         const color = point.selected ? '#41c7d7' : '#f0b451';
@@ -87,6 +148,7 @@ export function EndpointMap(props: {
           </CircleMarker>
         );
       })}
+      <FitRoute points={hops} />
       <FlyToSelected point={selected} />
     </MapContainer>
   );
