@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { WorldMapSvg } from './WorldMapSvg';
 import './App.css';
 
 type CollectorStatus = {
@@ -64,9 +65,17 @@ type Investigation = {
     links?: string[];
     error?: string;
   };
+  owner?: null | {
+    name: string;
+    isp: string;
+    asn: string;
+    asname: string;
+    error: string;
+  };
   geo: {
     countryCode: string;
     country: string;
+    city?: string;
     latitude: number | null;
     longitude: number | null;
     source: string;
@@ -79,6 +88,12 @@ type RouteTrace = {
   checkedAt: string;
   hops: Array<{ hop: number; address: string; latenciesMs: number[]; timedOut: boolean }>;
   error?: string;
+};
+
+type ConnectionStats = {
+  bytesIn: number;
+  bytesOut: number;
+  domains: string[];
 };
 
 const EMPTY_STATUS: CollectorStatus = {
@@ -108,6 +123,9 @@ function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const [investigations, setInvestigations] = useState<Record<string, Investigation>>({});
   const [routes, setRoutes] = useState<Record<string, RouteTrace>>({});
+  const [connectionStats, setConnectionStats] = useState<Record<string, ConnectionStats>>({});
+  const [investigating, setInvestigating] = useState<Record<string, boolean>>({});
+  const [tracing, setTracing] = useState<Record<string, boolean>>({});
   const wsRef = useRef<WebSocket | null>(null);
 
   const getApiUrl = (path: string) => {
@@ -138,10 +156,17 @@ function App() {
           setSettings(payload.data.settings);
           setConnections(payload.data.connections);
           setHistory(payload.data.history);
+          if (payload.data.investigations) {
+            setInvestigations(payload.data.investigations);
+          }
+          if (payload.data.stats) {
+            setConnectionStats(payload.data.stats);
+          }
           return;
         }
         if (payload.status) setStatus(payload.status);
         if (payload.connections) setConnections(payload.connections);
+        if (payload.stats) setConnectionStats(payload.stats);
         if (payload.type === 'settings_update') setSettings(payload.settings);
         if (payload.type === 'investigation_update') {
           setInvestigations((prev) => ({ ...prev, [payload.investigation.ip]: payload.investigation }));
@@ -173,6 +198,17 @@ function App() {
     () => connections.find((connection) => connection.id === selectedId) || history.find((connection) => connection.id === selectedId) || null,
     [connections, history, selectedId]
   );
+
+  // Kick off an investigation automatically when a public endpoint is selected,
+  // so the panel fills in without needing the Investigate button.
+  const autoInvestigated = useRef(new Set<string>());
+  useEffect(() => {
+    const ip = selectedConnection?.remoteAddress;
+    if (!ip || isLocalAddress(ip)) return;
+    if (investigations[ip] || autoInvestigated.current.has(ip)) return;
+    autoInvestigated.current.add(ip);
+    investigate(ip);
+  }, [selectedConnection, investigations]);
 
   const processes = useMemo(
     () => Array.from(new Set(connections.map((connection) => connection.processName))).sort(),
@@ -208,19 +244,47 @@ function App() {
   }, [connections, processes.length]);
 
   const investigate = async (ip: string) => {
-    const response = await fetch(getApiUrl(`/api/investigate/${encodeURIComponent(ip)}`));
-    const investigation = await response.json();
-    setInvestigations((prev) => ({ ...prev, [investigation.ip]: investigation }));
+    setInvestigating((prev) => ({ ...prev, [ip]: true }));
+    try {
+      const response = await fetch(getApiUrl(`/api/investigate/${encodeURIComponent(ip)}`));
+      const investigation = await response.json();
+      if (!response.ok || !investigation.ip) {
+        console.error('Investigation failed:', investigation.error || response.status);
+        return;
+      }
+      setInvestigations((prev) => ({ ...prev, [investigation.ip]: investigation }));
+    } catch (error) {
+      console.error('Investigation failed:', error);
+    } finally {
+      setInvestigating((prev) => ({ ...prev, [ip]: false }));
+    }
   };
 
   const trace = async (target: string) => {
-    const response = await fetch(getApiUrl('/api/routes'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target })
-    });
-    const route = await response.json();
-    setRoutes((prev) => ({ ...prev, [route.target]: route }));
+    setTracing((prev) => ({ ...prev, [target]: true }));
+    try {
+      const response = await fetch(getApiUrl('/api/routes'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target })
+      });
+      const route = await response.json();
+      setRoutes((prev) => ({ ...prev, [route.target]: route }));
+
+      // Investigate hops one at a time so the backend isn't flooded with
+      // up to 20 concurrent RDAP/PowerShell lookups per trace
+      if (route.hops) {
+        for (const hop of route.hops) {
+          if (hop.address && !investigations[hop.address]) {
+            await investigate(hop.address);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Trace failed:', error);
+    } finally {
+      setTracing((prev) => ({ ...prev, [target]: false }));
+    }
   };
 
   const saveSettings = async (patch: Partial<Settings>) => {
@@ -270,6 +334,7 @@ function App() {
       <section className="workspace">
         <ConnectionTable
           connections={filteredConnections}
+          stats={connectionStats}
           selectedId={selectedId}
           filter={filter}
           processFilter={processFilter}
@@ -282,7 +347,7 @@ function App() {
 
         <div className="right-rail">
           <WorldMap
-            connections={connections}
+            connections={filteredConnections}
             investigations={investigations}
             selected={selectedConnection}
             route={selectedRoute}
@@ -290,8 +355,12 @@ function App() {
           />
           <Inspector
             connection={selectedConnection}
+            investigations={investigations}
             investigation={selectedInvestigation}
             route={selectedRoute}
+            stats={selectedConnection ? connectionStats[selectedConnection.id] : undefined}
+            investigating={selectedConnection ? !!investigating[selectedConnection.remoteAddress] : false}
+            tracing={selectedConnection ? !!tracing[selectedConnection.remoteAddress] : false}
             onInvestigate={investigate}
             onTrace={trace}
           />
@@ -326,6 +395,7 @@ function Metric({ label, value }: { label: string; value: number }) {
 
 function ConnectionTable(props: {
   connections: Connection[];
+  stats: Record<string, ConnectionStats>;
   selectedId: string;
   filter: string;
   processFilter: string;
@@ -356,11 +426,14 @@ function ConnectionTable(props: {
           <span>Remote endpoint</span>
           <span>Local</span>
           <span>Route</span>
+          <span>Transfer</span>
           <span>Seen</span>
         </div>
         <div className="connection-table__body">
           {props.connections.length === 0 && <div className="empty">No active TCP sessions match the current filters.</div>}
-          {props.connections.map((connection) => (
+          {props.connections.map((connection) => {
+            const s = props.stats[connection.id];
+            return (
             <button
               key={connection.id}
               className={`connection-row ${props.selectedId === connection.id ? 'is-selected' : ''}`}
@@ -368,21 +441,26 @@ function ConnectionTable(props: {
               onDoubleClick={() => props.onInvestigate(connection.remoteAddress)}
             >
               <span>
-                <strong>{connection.processName}</strong>
+                <strong>{connection.processName} <CopyButton text={connection.processName} /></strong>
                 <small>PID {connection.pid}</small>
               </span>
               <span>
-                <strong>{connection.remoteAddress}:{connection.remotePort}</strong>
+                <strong title={`${connection.remoteAddress}:${connection.remotePort}`}>{formatEndpoint(connection.remoteAddress, connection.remotePort)} <CopyButton text={`${connection.remoteAddress}:${connection.remotePort}`} /></strong>
                 <small>{connection.state}</small>
               </span>
-              <span>{connection.localAddress}:{connection.localPort}</span>
+              <span title={`${connection.localAddress}:${connection.localPort}`}>{formatEndpoint(connection.localAddress, connection.localPort)}</span>
               <span>
                 <strong>{connection.interfaceAlias || 'Unknown adapter'}</strong>
                 <small>{connection.gateway || 'No gateway'}</small>
               </span>
+              <span>
+                <strong>{formatBytes(s?.bytesOut || 0)} <span style={{color:'var(--cyan)'}}>▲</span></strong>
+                <small>{formatBytes(s?.bytesIn || 0)} <span style={{color:'var(--green)'}}>▼</span></small>
+              </span>
               <span>{formatTime(connection.lastSeen)}</span>
             </button>
-          ))}
+            );
+          })}
         </div>
       </div>
     </section>
@@ -398,44 +476,74 @@ function WorldMap(props: {
 }) {
   const plotted = props.connections
     .map((connection) => ({ connection, investigation: props.investigations[connection.remoteAddress] }))
-    .filter((item) => typeof item.investigation?.geo.latitude === 'number' && typeof item.investigation?.geo.longitude === 'number');
+    .filter((item) => typeof item.investigation?.geo?.latitude === 'number' && typeof item.investigation?.geo?.longitude === 'number');
   const routePoints = (props.route?.hops || [])
     .map((hop) => props.investigations[hop.address])
-    .filter((investigation) => typeof investigation?.geo.latitude === 'number' && typeof investigation?.geo.longitude === 'number');
+    .filter((investigation) => typeof investigation?.geo?.latitude === 'number' && typeof investigation?.geo?.longitude === 'number');
+
+  const getCoords = (lat: number, lng: number) => {
+    const x = ((lng + 180) / 360) * 1000;
+    const y = ((90 - lat) / 180) * 500;
+    return { x, y };
+  };
+
+  const routePositions = routePoints.map(inv => getCoords(inv.geo.latitude!, inv.geo.longitude!));
 
   return (
-    <section className="panel map-panel">
+    <section className="panel map-panel" style={{ display: 'flex', flexDirection: 'column' }}>
       <div className="panel__header">
         <div>
           <h2>Endpoint map</h2>
           <p>{plotted.length} located endpoints</p>
         </div>
       </div>
-      <svg viewBox="0 0 1000 500" role="img" aria-label="World endpoint map" className="world-map">
-        <rect width="1000" height="500" rx="16" />
-        <path d="M151 129 205 92 285 103 322 142 295 191 218 206 145 180Z" />
-        <path d="M236 221 305 225 334 294 305 395 248 363 214 286Z" />
-        <path d="M447 118 515 95 604 120 626 183 580 220 494 205 433 170Z" />
-        <path d="M520 216 603 220 642 300 607 398 535 376 497 294Z" />
-        <path d="M646 119 806 98 892 155 857 246 745 254 659 201Z" />
-        <path d="M781 315 866 332 898 392 845 423 774 392Z" />
-        <path d="M428 403 501 414 527 447 470 464 407 446Z" />
-        {routePoints.map((investigation, index) => {
-          const point = project(investigation.geo.latitude || 0, investigation.geo.longitude || 0);
-          return <circle key={`${investigation.ip}-${index}`} className="route-point" cx={point.x} cy={point.y} r="5" />;
-        })}
-        {plotted.map(({ connection, investigation }) => {
-          const point = project(investigation.geo.latitude || 0, investigation.geo.longitude || 0);
-          const selected = props.selected?.id === connection.id;
-          return (
-            <g key={connection.id} className={selected ? 'map-point is-selected' : 'map-point'} onClick={() => props.onSelect(connection)}>
-              <circle cx={point.x} cy={point.y} r={selected ? 9 : 6} />
-              <title>{connection.remoteAddress} - {investigation.geo.country}</title>
-            </g>
-          );
-        })}
-      </svg>
-      <div className="map-caption">
+      <div style={{ flex: 1, minHeight: '300px', width: '100%', position: 'relative', zIndex: 0 }}>
+        <WorldMapSvg>
+          {routePositions.length > 1 && (
+            <polyline 
+              points={routePositions.map(p => `${p.x},${p.y}`).join(' ')} 
+              fill="none"
+              stroke="var(--green, #58d68d)" 
+              strokeWidth="2" 
+              strokeDasharray="5, 10" 
+            />
+          )}
+          {routePoints.map((investigation, index) => {
+            const { x, y } = getCoords(investigation.geo.latitude!, investigation.geo.longitude!);
+            return (
+              <circle
+                key={`${investigation.ip}-${index}`}
+                cx={x}
+                cy={y}
+                r={4}
+                fill="var(--green, #58d68d)"
+                opacity={0.8}
+              />
+            );
+          })}
+          {plotted.map(({ connection, investigation }) => {
+            const isSelected = props.selected?.id === connection.id;
+            const { x, y } = getCoords(investigation.geo.latitude!, investigation.geo.longitude!);
+            return (
+              <circle
+                key={connection.id}
+                cx={x}
+                cy={y}
+                r={isSelected ? 8 : 5}
+                fill={isSelected ? 'var(--cyan, #41c7d7)' : 'var(--amber, #f0b451)'}
+                opacity={isSelected ? 0.9 : 0.6}
+                stroke={isSelected ? 'var(--cyan, #41c7d7)' : 'var(--amber, #f0b451)'}
+                strokeWidth={isSelected ? 2 : 1}
+                style={{ cursor: 'pointer', transition: 'all 0.2s ease-in-out' }}
+                onClick={() => props.onSelect(connection)}
+              >
+                <title>{connection.remoteAddress}&#10;{investigation.geo.city ? `${investigation.geo.city}, ${investigation.geo.country}` : investigation.geo.country}</title>
+              </circle>
+            );
+          })}
+        </WorldMapSvg>
+      </div>
+      <div className="map-caption" style={{ marginTop: '10px' }}>
         Select a connection and run Investigate to locate it. Route hops appear after Trace route when location data is available.
       </div>
     </section>
@@ -444,8 +552,12 @@ function WorldMap(props: {
 
 function Inspector(props: {
   connection: Connection | null;
+  investigations: Record<string, Investigation>;
   investigation?: Investigation;
   route?: RouteTrace;
+  stats?: ConnectionStats;
+  investigating: boolean;
+  tracing: boolean;
   onInvestigate: (ip: string) => void;
   onTrace: (target: string) => void;
 }) {
@@ -455,17 +567,22 @@ function Inspector(props: {
 
   const connection = props.connection;
   const investigation = props.investigation;
+  const service = serviceName(connection.remotePort);
 
   return (
     <section className="panel inspector">
       <div className="panel__header">
         <div>
-          <h2>{connection.remoteAddress}</h2>
-          <p>{connection.processName} on port {connection.remotePort}</p>
+          <h2>{connection.remoteAddress} <CopyButton text={connection.remoteAddress} /></h2>
+          <p>{connection.processName} <CopyButton text={connection.processName} /> on port {connection.remotePort}{service ? ` (${service})` : ''}</p>
         </div>
         <div className="button-row">
-          <button onClick={() => props.onInvestigate(connection.remoteAddress)}>Investigate</button>
-          <button onClick={() => props.onTrace(connection.remoteAddress)}>Trace route</button>
+          <button onClick={() => props.onInvestigate(connection.remoteAddress)} disabled={props.investigating}>
+            {props.investigating ? 'Investigating…' : 'Investigate'}
+          </button>
+          <button onClick={() => props.onTrace(connection.remoteAddress)} disabled={props.tracing}>
+            {props.tracing ? 'Tracing…' : 'Trace route'}
+          </button>
         </div>
       </div>
       <div className="detail-grid">
@@ -476,52 +593,92 @@ function Inspector(props: {
         <Detail label="Adapter" value={connection.interfaceAlias || 'Unavailable'} />
         <Detail label="First seen" value={formatDate(connection.firstSeen)} />
       </div>
+      {(props.stats && props.stats.domains.length > 0) && (
+        <div className="investigation-block" style={{ paddingBottom: 0, borderBottom: 'none' }}>
+          <Detail label="Captured Domains (SNI / DNS)" value={props.stats.domains.join(', ')} />
+        </div>
+      )}
       <div className="investigation-block">
         <h3>Investigation</h3>
-        {!investigation && <p className="muted">No lookup has been run for this endpoint yet.</p>}
-        {investigation && (
+        {!investigation && props.investigating && <p className="muted">Looking up ownership, DNS, and location…</p>}
+        {!investigation && !props.investigating && <p className="muted">No lookup has been run for this endpoint yet.</p>}
+        {investigation?.privateAddress && <p className="muted">Private or reserved address — no public registry data to look up.</p>}
+        {investigation && !investigation.privateAddress && (
           <>
-            <Detail label="Reverse DNS" value={investigation.ptr.join(', ') || 'No PTR record'} />
-            <Detail label="Network owner" value={investigation.rdap?.name || investigation.rdap?.handle || investigation.rdap?.error || 'Unavailable'} />
-            <Detail label="ASN" value={investigation.rdap?.asn || 'Unavailable'} />
-            <Detail label="Location" value={investigation.geo.country || investigation.geo.source} />
-            {investigation.dnsCacheHints.length > 0 && (
+            <Detail label="Reverse DNS" value={(investigation.ptr || []).join(', ') || 'No PTR record'} />
+            <Detail label="Network owner" value={ownerName(investigation) || 'Unavailable'} />
+            {investigation.owner?.isp && investigation.owner.isp !== ownerName(investigation) && (
+              <Detail label="ISP" value={investigation.owner.isp} />
+            )}
+            <Detail label="ASN" value={formatAsn(investigation) || 'Unavailable'} />
+            <Detail label="Location" value={investigation.geo?.city ? `${investigation.geo.city}, ${investigation.geo.country}` : (investigation.geo?.country || 'Unavailable')} />
+            {(investigation.dnsCacheHints || []).length > 0 && (
               <div className="dns-hints">
                 {investigation.dnsCacheHints.map((hint, index) => (
                   <span key={`${hint.Entry || hint.Name}-${index}`}>{hint.Entry || hint.Name}</span>
                 ))}
               </div>
             )}
+            {investigation.owner?.error && !ownerName(investigation) && (
+              <p className="lookup-error">
+                Lookups failed ({investigation.owner.error}).{' '}
+                <button className="link-btn" onClick={() => props.onInvestigate(connection.remoteAddress)} disabled={props.investigating}>Retry</button>
+              </p>
+            )}
           </>
         )}
       </div>
-      <RouteView route={props.route} />
+      <RouteView route={props.route} investigations={props.investigations} />
     </section>
   );
 }
 
 function Detail({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    if (!value || value === 'Unavailable') return;
+    navigator.clipboard.writeText(value);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const isCopyable = value && value !== 'Unavailable';
+
   return (
-    <div className="detail">
+    <div 
+      className={`detail ${isCopyable ? 'detail--copyable' : ''}`} 
+      onClick={handleCopy} 
+      title={isCopyable ? 'Click to copy' : ''}
+    >
       <span>{label}</span>
-      <strong title={value}>{value}</strong>
+      <strong title={value}>{value} {copied && <span className="copy-feedback">Copied!</span>}</strong>
     </div>
   );
 }
 
-function RouteView({ route }: { route?: RouteTrace }) {
+function RouteView({ route, investigations }: { route?: RouteTrace, investigations?: Record<string, Investigation> }) {
   return (
     <div className="route-view">
       <h3>Route</h3>
       {!route && <p className="muted">Run Trace route to map the network path from this PC.</p>}
       {route?.error && <p className="muted">{route.error}</p>}
-      {route?.hops.map((hop) => (
-        <div className="hop" key={hop.hop}>
-          <span>{hop.hop}</span>
-          <strong>{hop.address || 'Timed out'}</strong>
-          <small>{hop.latenciesMs.length ? `${Math.min(...hop.latenciesMs)}-${Math.max(...hop.latenciesMs)} ms` : '*'}</small>
-        </div>
-      ))}
+      {route?.hops.map((hop) => {
+        const inv = investigations ? investigations[hop.address] : undefined;
+        const geoText = inv?.geo?.city ? `${inv.geo.city}, ${inv.geo.country}` : (inv?.geo?.country || '');
+        const ptrText = inv?.ptr?.[0] || '';
+        return (
+          <div className="hop" key={hop.hop}>
+            <span>{hop.hop}</span>
+            <div>
+              <strong>{hop.address || 'Timed out'}</strong>
+              {geoText && <small className="hop-geo" style={{ display: 'block', color: 'var(--muted)' }}>{geoText}</small>}
+              {ptrText && <small className="hop-ptr" style={{ display: 'block', color: 'var(--faint)' }}>{ptrText}</small>}
+            </div>
+            <small>{hop.latenciesMs.length ? `${Math.min(...hop.latenciesMs)}-${Math.max(...hop.latenciesMs)} ms` : '*'}</small>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -600,15 +757,53 @@ function SettingsPanel(props: { settings: Settings; status: CollectorStatus; onS
   );
 }
 
-function project(latitude: number, longitude: number) {
-  return {
-    x: ((longitude + 180) / 360) * 1000,
-    y: ((90 - latitude) / 180) * 500
-  };
+
+
+function ownerName(investigation: Investigation) {
+  if (investigation.owner?.name) return investigation.owner.name;
+  // Older cached records predate the owner block; fall back to raw RDAP fields
+  if (investigation.rdap && !investigation.rdap.error) {
+    return investigation.rdap.name || investigation.rdap.handle || '';
+  }
+  return '';
+}
+
+function formatAsn(investigation: Investigation) {
+  const asn = investigation.owner?.asn || investigation.rdap?.asn || '';
+  const asname = investigation.owner?.asname || '';
+  if (!asn) return '';
+  return asname ? `${asn} · ${asname}` : asn;
+}
+
+const WELL_KNOWN_PORTS: Record<number, string> = {
+  20: 'FTP data', 21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 53: 'DNS',
+  80: 'HTTP', 110: 'POP3', 123: 'NTP', 143: 'IMAP', 161: 'SNMP', 194: 'IRC',
+  443: 'HTTPS', 445: 'SMB', 465: 'SMTPS', 587: 'SMTP submission', 853: 'DNS over TLS',
+  993: 'IMAPS', 995: 'POP3S', 1194: 'OpenVPN', 1433: 'MSSQL', 3306: 'MySQL',
+  3389: 'RDP', 3478: 'STUN/TURN', 4500: 'IPsec NAT-T', 5060: 'SIP', 5222: 'XMPP',
+  5223: 'Push notifications', 5228: 'Google services', 5432: 'PostgreSQL',
+  6379: 'Redis', 8080: 'HTTP alt', 8443: 'HTTPS alt', 27017: 'MongoDB', 51820: 'WireGuard'
+};
+
+function serviceName(port: number) {
+  return WELL_KNOWN_PORTS[port] || '';
 }
 
 function isLocalAddress(address: string) {
   return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|127\.|169\.254\.|fe80:|fc|fd|::1)/i.test(address);
+}
+
+function formatEndpoint(address: string, port: number) {
+  let displayAddress = address;
+  if (address.includes(':')) {
+    if (address.length > 20) {
+      const first = address.substring(0, 9);
+      const last = address.substring(address.length - 4);
+      displayAddress = `${first}…${last}`;
+    }
+    return `[${displayAddress}]:${port}`;
+  }
+  return `${displayAddress}:${port}`;
 }
 
 function formatTime(value: string) {
@@ -616,9 +811,37 @@ function formatTime(value: string) {
   return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 }
 
+function formatBytes(bytes: number) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
 function formatDate(value: string) {
   if (!value) return '';
   return new Date(value).toLocaleString();
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!text || text === 'Unavailable') return;
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (!text || text === 'Unavailable') return null;
+
+  return (
+    <button className="copy-btn" onClick={handleCopy} title="Copy to clipboard">
+      {copied ? '✓' : '⧉'}
+    </button>
+  );
 }
 
 export default App;

@@ -6,9 +6,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { collectWindowsSnapshot } from './src/windowsCollector.js';
-import { diffConnections, publicRemoteConnections } from './src/connectionUtils.js';
+import { diffConnections, publicRemoteConnections, isPrivateOrReservedIP } from './src/connectionUtils.js';
 import { investigateIp, traceRoute } from './src/investigator.js';
 import { openStore } from './src/store.js';
+import { PacketSniffer } from './src/packetSniffer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +29,50 @@ let status = {
 let currentConnections = [];
 let connectionMap = new Map();
 let pollTimer = null;
+
+const connectionStats = new Map();
+const globalDnsCache = new Map();
+let activePortMap = new Map();
+
+const packetSniffer = new PacketSniffer();
+packetSniffer.on('packet', (pkt) => {
+  if (pkt.domains.length && pkt.resolvedIps.length) {
+    for (const ip of pkt.resolvedIps) {
+      globalDnsCache.set(ip, pkt.domains[0]);
+    }
+  }
+
+  if (!pkt.srcIp || !pkt.dstIp || !pkt.srcPort || !pkt.dstPort) return;
+
+  let connId = null;
+  let isOutbound = false;
+
+  const outKey = `${pkt.proto}|${pkt.srcIp}|${pkt.srcPort}`;
+  const inKey = `${pkt.proto}|${pkt.dstIp}|${pkt.dstPort}`;
+
+  if (activePortMap.has(outKey)) {
+    connId = activePortMap.get(outKey);
+    isOutbound = true;
+  } else if (activePortMap.has(inKey)) {
+    connId = activePortMap.get(inKey);
+    isOutbound = false;
+  }
+
+  if (connId) {
+    const stats = connectionStats.get(connId);
+    if (!stats) return;
+    
+    if (isOutbound) {
+      stats.bytesOut += pkt.len;
+    } else {
+      stats.bytesIn += pkt.len;
+    }
+
+    for (const domain of pkt.domains) {
+      stats.domains.add(domain);
+    }
+  }
+});
 
 const app = express();
 app.use(cors());
@@ -118,12 +163,25 @@ function broadcast(payload) {
 }
 
 function buildState() {
+  const activeInvestigations = {};
+  const statsPayload = {};
+  for (const conn of currentConnections) {
+    const inv = store.readInvestigation(conn.remoteAddress);
+    if (inv) activeInvestigations[conn.remoteAddress] = inv;
+    if (connectionStats.has(conn.id)) {
+      const s = connectionStats.get(conn.id);
+      statsPayload[conn.id] = { bytesIn: s.bytesIn, bytesOut: s.bytesOut, domains: Array.from(s.domains) };
+    }
+  }
+
   return {
     status,
     settings,
     connections: currentConnections,
     publicConnections: publicRemoteConnections(currentConnections),
-    historyCount: store.getHistory(1).length
+    historyCount: store.getHistory(1).length,
+    investigations: activeInvestigations,
+    stats: statsPayload
   };
 }
 
@@ -151,14 +209,48 @@ async function pollConnections() {
     }
     store.pruneHistory(settings.historyRetentionDays);
 
+    activePortMap.clear();
+    const statsPayload = {};
+    for (const conn of currentConnections) {
+      activePortMap.set(`${conn.protocol}|${conn.localAddress}|${conn.localPort}`, conn.id);
+      
+      if (!connectionStats.has(conn.id)) {
+        connectionStats.set(conn.id, { bytesIn: 0, bytesOut: 0, domains: new Set() });
+      }
+      const stats = connectionStats.get(conn.id);
+      if (globalDnsCache.has(conn.remoteAddress) && stats.domains.size === 0) {
+        stats.domains.add(globalDnsCache.get(conn.remoteAddress));
+      }
+      
+      statsPayload[conn.id] = {
+        bytesIn: stats.bytesIn,
+        bytesOut: stats.bytesOut,
+        domains: Array.from(stats.domains)
+      };
+    }
+
     broadcast({
       type: changed.length ? 'connection_delta' : 'connection_snapshot',
       connections: currentConnections,
       added: diff.added,
       updated: diff.updated,
       closed: diff.closed,
-      status
+      status,
+      stats: statsPayload
     });
+
+    const newPublicIPs = new Set(
+      diff.added
+        .map(c => c.remoteAddress)
+        .filter(ip => !isPrivateOrReservedIP(ip))
+    );
+    for (const ip of newPublicIPs) {
+      // investigateIp handles caching internally; calling it unconditionally
+      // lets stale or previously-failed lookups heal instead of sticking forever.
+      investigateIp(ip, { store })
+        .then(inv => broadcast({ type: 'investigation_update', investigation: inv }))
+        .catch(e => console.error('Auto-investigate failed:', e.message));
+    }
   } catch (error) {
     status = { ...status, collector: 'error', lastError: error.message };
     broadcast({ type: 'collector_error', status });
@@ -174,4 +266,5 @@ function restartPolling() {
 server.listen(PORT, () => {
   console.log(`NetShield Windows Connection Investigator running on http://localhost:${PORT}`);
   restartPolling();
+  packetSniffer.start();
 });

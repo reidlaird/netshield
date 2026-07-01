@@ -3,53 +3,90 @@ import net from 'node:net';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isPrivateOrReservedIP, normalizeAddress } from './connectionUtils.js';
-
+import geoip from 'geoip-lite';
 const execFileAsync = promisify(execFile);
 
-const COUNTRY_POINTS = {
-  CA: { lat: 56.1304, lon: -106.3468, label: 'Canada' },
-  US: { lat: 39.8283, lon: -98.5795, label: 'United States' },
-  GB: { lat: 55.3781, lon: -3.436, label: 'United Kingdom' },
-  IE: { lat: 53.4129, lon: -8.2439, label: 'Ireland' },
-  DE: { lat: 51.1657, lon: 10.4515, label: 'Germany' },
-  FR: { lat: 46.2276, lon: 2.2137, label: 'France' },
-  NL: { lat: 52.1326, lon: 5.2913, label: 'Netherlands' },
-  SE: { lat: 60.1282, lon: 18.6435, label: 'Sweden' },
-  JP: { lat: 36.2048, lon: 138.2529, label: 'Japan' },
-  SG: { lat: 1.3521, lon: 103.8198, label: 'Singapore' },
-  AU: { lat: -25.2744, lon: 133.7751, label: 'Australia' },
-  BR: { lat: -14.235, lon: -51.9253, label: 'Brazil' },
-  IN: { lat: 20.5937, lon: 78.9629, label: 'India' }
-};
 
-export async function investigateIp(ip, options = {}) {
+
+const pendingInvestigations = new Map();
+
+export function investigateIp(ip, options = {}) {
   const address = normalizeAddress(ip);
+  // Coalesce concurrent requests for the same IP (trace hops, auto-investigate bursts)
+  const pending = pendingInvestigations.get(address);
+  if (pending) return pending;
+
+  const promise = doInvestigate(address, options)
+    .finally(() => pendingInvestigations.delete(address));
+  pendingInvestigations.set(address, promise);
+  return promise;
+}
+
+async function doInvestigate(address, options = {}) {
   const checkedAt = new Date().toISOString();
   const privateAddress = isPrivateOrReservedIP(address);
   const cached = options.store?.readInvestigation(address);
 
   if (cached && !isStale(cached.checkedAt, options.maxCacheAgeMs ?? 1000 * 60 * 60 * 24)) {
-    return { ...cached, fromCache: true };
+    // Re-investigate records cached before geo/owner support existed, and
+    // records whose lookups all failed (timeouts, 429 rate limits) so they heal.
+    const healthy = cached.privateAddress || (cached.owner && !cached.owner.error && cached.owner.name);
+    if (cached.geo && healthy) {
+      return { ...cached, fromCache: true };
+    }
   }
 
-  const [ptr, dnsCacheHints, rdap] = await Promise.all([
+  const [ptr, dnsCacheHints, rdap, ipApi] = await Promise.all([
     resolvePtr(address),
     resolveDnsCacheHints(address),
-    privateAddress ? Promise.resolve(null) : lookupRdap(address)
+    privateAddress ? Promise.resolve(null) : lookupRdap(address),
+    privateAddress ? Promise.resolve(null) : lookupIpApi(address)
   ]);
 
-  const countryCode = rdap?.countryCode || '';
-  const centroid = countryCode ? COUNTRY_POINTS[countryCode] : null;
+  // ip-api gives city-level results with good IPv6 coverage; geoip-lite is the
+  // offline fallback and often only resolves IPv6 to a country centroid.
+  const geoLookup = geoip.lookup(address);
+  let geo;
+  if (ipApi && typeof ipApi.lat === 'number' && typeof ipApi.lon === 'number') {
+    geo = {
+      countryCode: ipApi.countryCode || '',
+      country: ipApi.country || ipApi.countryCode || '',
+      city: [ipApi.city, ipApi.regionName].filter(Boolean).join(', '),
+      latitude: ipApi.lat,
+      longitude: ipApi.lon,
+      source: 'ip-api'
+    };
+  } else if (geoLookup?.ll) {
+    geo = {
+      countryCode: geoLookup.country || '',
+      country: geoLookup.country || '',
+      city: geoLookup.city || '',
+      latitude: geoLookup.ll[0],
+      longitude: geoLookup.ll[1],
+      source: 'geoip-lite'
+    };
+  } else {
+    const countryCode = rdap?.countryCode || '';
+    geo = { countryCode, country: countryCode, city: '', latitude: null, longitude: null, source: privateAddress ? 'private' : 'unlocated' };
+  }
+
+  const owner = privateAddress ? null : {
+    name: (rdap && !rdap.error && (rdap.name || rdap.handle)) || ipApi?.org || ipApi?.isp || '',
+    isp: ipApi?.isp || '',
+    asn: parseAsNumber(ipApi?.as) || rdap?.asn || '',
+    asname: ipApi?.asname || '',
+    error: (rdap?.error && ipApi?.error) ? `${rdap.error}; ${ipApi.error}` : ''
+  };
+
   const result = {
     ip: address,
     checkedAt,
     privateAddress,
-    ptr,
+    ptr: (ptr && ptr.length) ? ptr : (ipApi?.reverse ? [ipApi.reverse] : []),
     dnsCacheHints,
     rdap,
-    geo: centroid
-      ? { countryCode, country: centroid.label, latitude: centroid.lat, longitude: centroid.lon, source: 'rdap-country-centroid' }
-      : { countryCode, country: rdap?.country || '', latitude: null, longitude: null, source: privateAddress ? 'private' : 'unlocated' }
+    owner,
+    geo
   };
 
   options.store?.cacheInvestigation(address, result);
@@ -68,7 +105,8 @@ export async function traceRoute(target, options = {}) {
     const { stdout } = await execFileAsync(
       'tracert.exe',
       ['-d', '-h', '20', '-w', '750', normalizedTarget],
-      { windowsHide: true, timeout: 25000, maxBuffer: 1024 * 1024 }
+      // Worst case: 20 hops x 3 probes x 750ms plus resolution overhead
+      { windowsHide: true, timeout: 60000, maxBuffer: 1024 * 1024 }
     );
     const result = {
       target: normalizedTarget,
@@ -136,11 +174,29 @@ async function resolveDnsCacheHints(ip) {
   }
 }
 
-async function lookupRdap(ip) {
+// rdap.org rate-limits aggressive clients, so space requests out and never
+// run more than one at a time (trace routes can queue up ~20 lookups at once).
+const RDAP_SPACING_MS = 300;
+let rdapChain = Promise.resolve();
+
+function lookupRdap(ip) {
+  const run = rdapChain.then(() => fetchRdap(ip));
+  rdapChain = run.catch(() => {}).then(() => sleep(RDAP_SPACING_MS));
+  return run;
+}
+
+async function fetchRdap(ip, attempt = 0) {
   try {
-    const response = await fetch(`https://rdap.org/ip/${encodeURIComponent(ip)}`, {
-      headers: { Accept: 'application/rdap+json, application/json' }
+    // Do not use encodeURIComponent, RDAP expects raw colons for IPv6
+    const response = await fetch(`https://rdap.org/ip/${ip}`, {
+      headers: { Accept: 'application/rdap+json, application/json' },
+      signal: AbortSignal.timeout(8000)
     });
+    if (response.status === 429 && attempt === 0) {
+      const retryAfter = Number(response.headers.get('retry-after')) || 2;
+      await sleep(Math.min(retryAfter, 10) * 1000);
+      return fetchRdap(ip, 1);
+    }
     if (!response.ok) {
       return { status: response.status, error: `RDAP lookup failed with HTTP ${response.status}` };
     }
@@ -152,7 +208,7 @@ async function lookupRdap(ip) {
       handle: body.handle || '',
       name,
       countryCode,
-      country: COUNTRY_POINTS[countryCode]?.label || countryCode,
+      country: countryCode,
       asn,
       links: Array.isArray(body.links) ? body.links.map((link) => link.href).filter(Boolean).slice(0, 4) : []
     };
@@ -161,10 +217,51 @@ async function lookupRdap(ip) {
   }
 }
 
+// ip-api.com free tier allows 45 requests/minute; serialize with enough
+// spacing to stay under it even during auto-investigate bursts.
+const IP_API_SPACING_MS = 1500;
+let ipApiChain = Promise.resolve();
+
+function lookupIpApi(ip) {
+  const run = ipApiChain.then(() => fetchIpApi(ip));
+  ipApiChain = run.catch(() => {}).then(() => sleep(IP_API_SPACING_MS));
+  return run;
+}
+
+const IP_API_FIELDS = 'status,message,country,countryCode,regionName,city,lat,lon,isp,org,as,asname,reverse';
+
+async function fetchIpApi(ip) {
+  try {
+    const response = await fetch(`http://ip-api.com/json/${ip}?fields=${IP_API_FIELDS}`, {
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) {
+      return { error: `ip-api lookup failed with HTTP ${response.status}` };
+    }
+    const body = await response.json();
+    if (body.status !== 'success') {
+      return { error: body.message || 'ip-api lookup failed' };
+    }
+    return body;
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
+function parseAsNumber(asField) {
+  // ip-api "as" looks like "AS396982 Google LLC"
+  const match = String(asField || '').match(/^AS\d+/i);
+  return match ? match[0].toUpperCase() : '';
+}
+
 function extractAsn(body) {
   const text = JSON.stringify(body);
   const match = text.match(/\bAS(\d{1,10})\b/i) || text.match(/"autnum"\s*:\s*(\d+)/i);
   return match ? `AS${match[1]}` : '';
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isStale(isoDate, maxAgeMs) {

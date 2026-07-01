@@ -50,6 +50,27 @@ button:hover {
   border-color: var(--cyan);
 }
 
+button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.lookup-error {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--amber, #f0b451);
+}
+
+.link-btn {
+  border: none;
+  background: none;
+  min-height: 0;
+  padding: 0;
+  color: var(--cyan, #41c7d7);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 input,
 select {
   width: 100%;
@@ -197,6 +218,7 @@ h3 {
   grid-template-columns: minmax(620px, 1.5fr) minmax(420px, 1fr);
   gap: 14px;
   min-height: 760px;
+  align-items: start;
 }
 
 .right-rail,
@@ -206,6 +228,10 @@ h3 {
 }
 
 .right-rail {
+  position: sticky;
+  top: 18px;
+  height: calc(100vh - 220px);
+  min-height: 760px;
   grid-template-rows: 0.9fr 1.1fr;
 }
 
@@ -239,6 +265,8 @@ h3 {
 .connection-panel {
   display: flex;
   flex-direction: column;
+  height: calc(100vh - 220px);
+  min-height: 760px;
 }
 
 .connection-table {
@@ -251,7 +279,7 @@ h3 {
 .connection-table__head,
 .connection-row {
   display: grid;
-  grid-template-columns: 1fr 1.35fr 1.2fr 1.1fr 90px;
+  grid-template-columns: 1.1fr 1.35fr 1fr 1fr 90px 90px;
   gap: 10px;
   align-items: center;
 }
@@ -277,6 +305,10 @@ h3 {
   border-radius: 6px;
   padding: 10px 8px;
   color: var(--text);
+}
+
+.connection-row:nth-child(even) {
+  background: rgba(19, 36, 43, 0.4);
 }
 
 .connection-row:hover,
@@ -366,6 +398,16 @@ h3 {
   padding: 9px 10px;
 }
 
+.detail--copyable {
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.detail--copyable:hover {
+  border-color: var(--cyan);
+  background: #102128;
+}
+
 .detail span {
   display: block;
   color: var(--faint);
@@ -380,6 +422,34 @@ h3 {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.88rem;
+}
+
+.copy-feedback {
+  color: var(--green);
+  font-size: 0.7rem;
+  font-weight: normal;
+  margin-left: 6px;
+  text-transform: none;
+}
+
+.copy-btn {
+  background: transparent;
+  border: none;
+  color: var(--faint);
+  min-height: auto;
+  padding: 0 4px;
+  margin-left: 4px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.copy-btn:hover {
+  color: var(--cyan);
+  background: rgba(65, 199, 215, 0.1);
+  border-color: transparent;
 }
 
 .investigation-block,
@@ -528,3 +598,4 @@ h3 {
     grid-template-columns: 1fr;
   }
 }
+.leaflet-container { background: #071014; } .dark-popup .leaflet-popup-content-wrapper { background: #13252d; color: #edf7f8; } .dark-popup .leaflet-popup-tip { background: #13252d; }
