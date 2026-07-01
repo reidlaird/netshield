@@ -523,6 +523,25 @@ function ConnectionTable(props: {
   metricFilter: 'all' | 'public' | 'processes' | 'ipv6';
   onClearMetricFilter: () => void;
 }) {
+  const [groupByProcess, setGroupByProcess] = useState(false);
+  const [expandedProcesses, setExpandedProcesses] = useState<Record<string, boolean>>({});
+
+  const toggleProcess = (name: string) => {
+    setExpandedProcesses(prev => ({
+      ...prev,
+      [name]: !prev[name]
+    }));
+  };
+
+  const groupedConnections = useMemo(() => {
+    const map: Record<string, Connection[]> = {};
+    for (const c of props.connections) {
+      if (!map[c.processName]) map[c.processName] = [];
+      map[c.processName].push(c);
+    }
+    return map;
+  }, [props.connections]);
+
   return (
     <section className="panel connection-panel">
       <div className="panel__header">
@@ -546,6 +565,14 @@ function ConnectionTable(props: {
           </p>
         </div>
         <div className="toolbar">
+          <button
+            type="button"
+            className={`toggle-group-btn ${groupByProcess ? 'is-active' : ''}`}
+            onClick={() => setGroupByProcess(!groupByProcess)}
+            title="Group connections by process"
+          >
+            {groupByProcess ? '📂 Grouped' : '🗂️ Group by Process'}
+          </button>
           <input value={props.filter} onChange={(event) => props.onFilter(event.target.value)} placeholder="IP, port, process, adapter" />
           <select value={props.processFilter} onChange={(event) => props.onProcessFilter(event.target.value)}>
             <option value="all">All processes</option>
@@ -600,49 +627,151 @@ function ConnectionTable(props: {
         </div>
         <div className="connection-table__body">
           {props.connections.length === 0 && <div className="empty">No active TCP sessions match the current filters.</div>}
-          {props.connections.map((connection) => {
-            const s = props.stats[connection.id];
-            return (
-            <button
-              key={connection.id}
-              type="button"
-              className={`connection-row ${props.selectedId === connection.id ? 'is-selected' : ''}`}
-              onClick={() => props.onSelect(connection.id)}
-              onDoubleClick={() => props.onInvestigate(connection.remoteAddress)}
-            >
-              <span>
-                <strong className="process-name-cell">
-                  <span className={`process-badge ${getProcessTypeClass(connection.processName)}`}>
-                    {connection.processName}
+          
+          {groupByProcess ? (
+            Object.entries(groupedConnections).map(([processName, conns]) => {
+              const isExpanded = !!expandedProcesses[processName];
+              
+              // Calculate group aggregates
+              const totalTx = conns.reduce((sum, c) => sum + (props.stats[c.id]?.bytesOut || 0), 0);
+              const totalRx = conns.reduce((sum, c) => sum + (props.stats[c.id]?.bytesIn || 0), 0);
+              
+              return (
+                <div key={processName}>
+                  <div className="process-group-header" onClick={() => toggleProcess(processName)}>
+                    <span className="process-group-title">
+                      <span className="chevron">{isExpanded ? '▼' : '▶'}</span>
+                      <span className={`process-badge ${getProcessTypeClass(processName)}`}>
+                        {processName}
+                      </span>
+                      <span className="process-group-count">{conns.length} {conns.length === 1 ? 'session' : 'sessions'}</span>
+                    </span>
+                    <span className="process-group-line" />
+                    <span className="process-group-transfer">
+                      <span>▲ {formatBytes(totalTx)}</span>
+                      <span>▼ {formatBytes(totalRx)}</span>
+                    </span>
+                  </div>
+                  
+                  {isExpanded && (
+                    <div className="process-group-children">
+                      {conns.map((connection) => {
+                        const s = props.stats[connection.id];
+                        const alerts = getConnectionAlerts(connection);
+                        return (
+                          <button
+                            key={connection.id}
+                            type="button"
+                            className={`connection-row ${props.selectedId === connection.id ? 'is-selected' : ''}`}
+                            onClick={() => props.onSelect(connection.id)}
+                            onDoubleClick={() => props.onInvestigate(connection.remoteAddress)}
+                          >
+                            <span>
+                              <strong className="process-name-cell">
+                                <span className={`process-badge ${getProcessTypeClass(connection.processName)}`}>
+                                  {connection.processName}
+                                </span>
+                                <CopyButton text={connection.processName} />
+                                {alerts.map(a => (
+                                  <span key={a} className="anomaly-badge" title={`Alert: ${a}`}>⚠️ {a}</span>
+                                ))}
+                              </strong>
+                              <small>PID {connection.pid}</small>
+                            </span>
+                            <span>
+                              <strong title={`${connection.remoteAddress}:${connection.remotePort}`}>
+                                {formatEndpoint(connection.remoteAddress, connection.remotePort)}{' '}
+                                <CopyButton text={`${connection.remoteAddress}:${connection.remotePort}`} />
+                              </strong>
+                              <small className="state-cell">
+                                <span className={`state-dot ${getStateBadgeClass(connection.state)}`} />
+                                {connection.state}
+                              </small>
+                            </span>
+                            <span title={`${connection.localAddress}:${connection.localPort}`}>
+                              {formatEndpoint(connection.localAddress, connection.localPort)}
+                            </span>
+                            <span>
+                              <strong>{connection.interfaceAlias || 'Unknown adapter'}</strong>
+                              <small>{connection.gateway || 'No gateway'}</small>
+                            </span>
+                            <span className="transfer-cell">
+                              <div className="transfer-cell__text">
+                                <span className="tx" title="Sent (Bytes Out)">
+                                  <span className="arrow">▲</span> {formatBytes(s?.bytesOut || 0)}
+                                </span>
+                                <span className="rx" title="Received (Bytes In)">
+                                  <span className="arrow">▼</span> {formatBytes(s?.bytesIn || 0)}
+                                </span>
+                              </div>
+                              <TrafficSparkline bytes={(s?.bytesOut || 0) + (s?.bytesIn || 0)} />
+                            </span>
+                            <span>{formatTime(connection.lastSeen)}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            props.connections.map((connection) => {
+              const s = props.stats[connection.id];
+              const alerts = getConnectionAlerts(connection);
+              return (
+                <button
+                  key={connection.id}
+                  type="button"
+                  className={`connection-row ${props.selectedId === connection.id ? 'is-selected' : ''}`}
+                  onClick={() => props.onSelect(connection.id)}
+                  onDoubleClick={() => props.onInvestigate(connection.remoteAddress)}
+                >
+                  <span>
+                    <strong className="process-name-cell">
+                      <span className={`process-badge ${getProcessTypeClass(connection.processName)}`}>
+                        {connection.processName}
+                      </span>
+                      <CopyButton text={connection.processName} />
+                      {alerts.map(a => (
+                        <span key={a} className="anomaly-badge" title={`Alert: ${a}`}>⚠️ {a}</span>
+                      ))}
+                    </strong>
+                    <small>PID {connection.pid}</small>
                   </span>
-                  <CopyButton text={connection.processName} />
-                </strong>
-                <small>PID {connection.pid}</small>
-              </span>
-              <span>
-                <strong title={`${connection.remoteAddress}:${connection.remotePort}`}>{formatEndpoint(connection.remoteAddress, connection.remotePort)} <CopyButton text={`${connection.remoteAddress}:${connection.remotePort}`} /></strong>
-                <small className="state-cell">
-                  <span className={`state-dot ${getStateBadgeClass(connection.state)}`} />
-                  {connection.state}
-                </small>
-              </span>
-              <span title={`${connection.localAddress}:${connection.localPort}`}>{formatEndpoint(connection.localAddress, connection.localPort)}</span>
-              <span>
-                <strong>{connection.interfaceAlias || 'Unknown adapter'}</strong>
-                <small>{connection.gateway || 'No gateway'}</small>
-              </span>
-              <span className="transfer-cell">
-                <span className="tx" title="Sent (Bytes Out)">
-                  <span className="arrow">▲</span> {formatBytes(s?.bytesOut || 0)}
-                </span>
-                <span className="rx" title="Received (Bytes In)">
-                  <span className="arrow">▼</span> {formatBytes(s?.bytesIn || 0)}
-                </span>
-              </span>
-              <span>{formatTime(connection.lastSeen)}</span>
-            </button>
-            );
-          })}
+                  <span>
+                    <strong title={`${connection.remoteAddress}:${connection.remotePort}`}>
+                      {formatEndpoint(connection.remoteAddress, connection.remotePort)}{' '}
+                      <CopyButton text={`${connection.remoteAddress}:${connection.remotePort}`} />
+                    </strong>
+                    <small className="state-cell">
+                      <span className={`state-dot ${getStateBadgeClass(connection.state)}`} />
+                      {connection.state}
+                    </small>
+                  </span>
+                  <span title={`${connection.localAddress}:${connection.localPort}`}>
+                    {formatEndpoint(connection.localAddress, connection.localPort)}
+                  </span>
+                  <span>
+                    <strong>{connection.interfaceAlias || 'Unknown adapter'}</strong>
+                    <small>{connection.gateway || 'No gateway'}</small>
+                  </span>
+                  <span className="transfer-cell">
+                    <div className="transfer-cell__text">
+                      <span className="tx" title="Sent (Bytes Out)">
+                        <span className="arrow">▲</span> {formatBytes(s?.bytesOut || 0)}
+                      </span>
+                      <span className="rx" title="Received (Bytes In)">
+                        <span className="arrow">▼</span> {formatBytes(s?.bytesIn || 0)}
+                      </span>
+                    </div>
+                    <TrafficSparkline bytes={(s?.bytesOut || 0) + (s?.bytesIn || 0)} />
+                  </span>
+                  <span>{formatTime(connection.lastSeen)}</span>
+                </button>
+              );
+            })
+          )}
         </div>
       </div>
     </section>
@@ -660,8 +789,8 @@ function WorldMap(props: {
     .map((connection) => ({ connection, investigation: props.investigations[connection.remoteAddress] }))
     .filter((item) => typeof item.investigation?.geo?.latitude === 'number' && typeof item.investigation?.geo?.longitude === 'number');
   const routePoints = (props.route?.hops || [])
-    .map((hop) => props.investigations[hop.address])
-    .filter((investigation) => typeof investigation?.geo?.latitude === 'number' && typeof investigation?.geo?.longitude === 'number');
+    .map((hop) => ({ hop, investigation: props.investigations[hop.address] }))
+    .filter((item) => typeof item.investigation?.geo?.latitude === 'number' && typeof item.investigation?.geo?.longitude === 'number');
 
   return (
     <section className="panel map-panel" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -681,9 +810,17 @@ function WorldMap(props: {
             sublabel: investigation.geo.city ? `${investigation.geo.city}, ${investigation.geo.country}` : investigation.geo.country,
             selected: props.selected?.id === connection.id,
           }))}
-          routePoints={routePoints.map((investigation) => ({
+          routePoints={routePoints.map(({ hop, investigation }) => ({
+            hop: hop.hop,
             latitude: investigation.geo.latitude!,
             longitude: investigation.geo.longitude!,
+            label: hop.address,
+            sublabel: investigation.geo.city
+              ? `${investigation.geo.city}, ${investigation.geo.country}`
+              : investigation.geo.country,
+            latency: hop.latenciesMs.length
+              ? `${Math.min(...hop.latenciesMs)}–${Math.max(...hop.latenciesMs)} ms`
+              : undefined,
           }))}
           onSelect={(id) => {
             const item = plotted.find((entry) => entry.connection.id === id);
@@ -692,7 +829,7 @@ function WorldMap(props: {
         />
       </div>
       <div className="map-caption" style={{ marginTop: '10px' }}>
-        Select a connection and run Investigate to locate it. Zoom in to see countries, regions, and cities. Route hops appear after Trace route when location data is available.
+        Select a connection and run Investigate to locate it. After Trace route, numbered hops show the path — cyan is your side, amber is the remote endpoint, and the dashes flow in the direction of incoming traffic.
       </div>
     </section>
   );
@@ -816,7 +953,7 @@ function RouteView({ route, investigations }: { route?: RouteTrace, investigatio
         const geoText = inv?.geo?.city ? `${inv.geo.city}, ${inv.geo.country}` : (inv?.geo?.country || '');
         const ptrText = inv?.ptr?.[0] || '';
         return (
-          <div className="hop" key={hop.hop}>
+          <div className={`hop ${hop.timedOut || !hop.address ? 'hop--timeout' : ''}`} key={hop.hop}>
             <span>{hop.hop}</span>
             <div>
               <strong>{hop.address || 'Timed out'}</strong>
@@ -1008,6 +1145,81 @@ function getStateBadgeClass(state: string) {
   if (lower.includes('wait')) return 'state-waiting';
   if (lower.includes('close') || lower.includes('time')) return 'state-closing';
   return 'state-other';
+}
+
+function TrafficSparkline({ bytes }: { bytes: number }) {
+  const [history, setHistory] = useState<number[]>([]);
+  const prevBytes = useRef(bytes);
+  const prevTime = useRef(Date.now());
+
+  useEffect(() => {
+    const now = Date.now();
+    const dt = (now - prevTime.current) / 1000;
+    const delta = bytes - prevBytes.current;
+    const rate = (dt > 0 && delta >= 0) ? delta / dt : 0;
+
+    prevBytes.current = bytes;
+    prevTime.current = now;
+
+    setHistory((prev) => {
+      const next = [...prev, rate];
+      if (next.length > 8) next.shift();
+      return next;
+    });
+  }, [bytes]);
+
+  if (history.length < 2) {
+    return <span className="sparkline-placeholder" />;
+  }
+
+  const max = Math.max(...history, 1);
+  const width = 45;
+  const height = 16;
+  const points = history
+    .map((val, idx) => {
+      const x = (idx / (history.length - 1)) * width;
+      const y = height - (val / max) * height;
+      return `${x},${y}`;
+    })
+    .join(' ');
+
+  return (
+    <svg className="sparkline" width={width} height={height} style={{ overflow: 'visible' }}>
+      <polyline
+        fill="none"
+        stroke="var(--cyan)"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        points={points}
+      />
+    </svg>
+  );
+}
+
+function getConnectionAlerts(connection: Connection) {
+  const alerts: string[] = [];
+  const port = connection.remotePort;
+  const isPublic = !isLocalAddress(connection.remoteAddress);
+
+  if (port === 80 && isPublic) {
+    const lowerProc = connection.processName.toLowerCase();
+    if (
+      lowerProc.includes('chrome') ||
+      lowerProc.includes('brave') ||
+      lowerProc.includes('msedge') ||
+      lowerProc.includes('firefox') ||
+      lowerProc.includes('claude')
+    ) {
+      alerts.push('HTTP');
+    }
+  }
+
+  if ((port === 21 || port === 23 || port === 135 || port === 139 || port === 445) && isPublic) {
+    alerts.push('Legacy');
+  }
+
+  return alerts;
 }
 
 export default App;
