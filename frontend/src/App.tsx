@@ -9,6 +9,7 @@ type CollectorStatus = {
   collectedAt: string;
   adapters: Adapter[];
   routes: DefaultRoute[];
+  sniffer?: { state: 'stopped' | 'running' | 'error'; detail: string };
 };
 
 type Adapter = {
@@ -49,6 +50,35 @@ type Connection = {
   firstSeen: string;
   lastSeen: string;
   status: 'open' | 'closed';
+  deviceName?: string;
+};
+
+type RouterDevice = {
+  mac: string;
+  ip: string;
+  hostname: string;
+  vendor?: string;
+  randomizedMac?: boolean;
+  connectionType: string;
+  signal: string;
+  linkRate: string;
+  online: boolean;
+};
+
+type RouterGateway = {
+  model: string;
+  productId: string;
+  firmware: string;
+  ip: string;
+  serial: string;
+};
+
+type RouterState = {
+  configured: boolean;
+  collectedAt: string;
+  devices: RouterDevice[];
+  gateway: RouterGateway | null;
+  error: string;
 };
 
 type Investigation = {
@@ -94,6 +124,8 @@ type RouteTrace = {
 type ConnectionStats = {
   bytesIn: number;
   bytesOut: number;
+  bytesInRate?: number;
+  bytesOutRate?: number;
   domains: string[];
 };
 
@@ -113,6 +145,14 @@ const EMPTY_STATUS: CollectorStatus = {
   collectedAt: '',
   adapters: [],
   routes: []
+};
+
+const EMPTY_ROUTER: RouterState = {
+  configured: false,
+  collectedAt: '',
+  devices: [],
+  gateway: null,
+  error: ''
 };
 
 const EMPTY_SETTINGS: Settings = {
@@ -143,10 +183,11 @@ function App() {
   const [sortKey, setSortKey] = useState<'processName' | 'remote' | 'local' | 'interfaceAlias' | 'transfer' | 'lastSeen'>('lastSeen');
   const [sortAsc, setSortAsc] = useState(false);
   const [metricFilter, setMetricFilter] = useState<'all' | 'public' | 'processes' | 'ipv6'>('all');
-  const [sidebarPanel, setSidebarPanel] = useState<'history' | 'reports' | 'settings' | null>(null);
+  const [router, setRouter] = useState<RouterState>(EMPTY_ROUTER);
+  const [sidebarPanel, setSidebarPanel] = useState<'history' | 'reports' | 'settings' | 'devices' | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  const toggleSidebarPanel = (panel: 'history' | 'reports' | 'settings') => {
+  const toggleSidebarPanel = (panel: 'history' | 'reports' | 'settings' | 'devices') => {
     setSidebarPanel((prev) => (prev === panel ? null : panel));
   };
 
@@ -187,6 +228,9 @@ function App() {
           if (payload.data.reports) {
             setReports(payload.data.reports);
           }
+          if (payload.data.router) {
+            setRouter(payload.data.router);
+          }
           return;
         }
         if (payload.status) setStatus(payload.status);
@@ -201,6 +245,7 @@ function App() {
         }
         if (payload.type === 'history_cleared') setHistory([]);
         if (payload.type === 'reports_update') setReports(payload.reports);
+        if (payload.type === 'router_devices') setRouter(payload.router);
       };
       ws.onclose = () => {
         setWsConnected(false);
@@ -469,6 +514,15 @@ function App() {
             isActive={sidebarPanel === 'reports'}
             onClick={() => toggleSidebarPanel('reports')}
           />
+          {router.configured && (
+            <SidebarButton
+              icon="📶"
+              label="Devices"
+              count={router.devices.length}
+              isActive={sidebarPanel === 'devices'}
+              onClick={() => toggleSidebarPanel('devices')}
+            />
+          )}
           <SidebarButton
             icon="⚙️"
             label="Settings"
@@ -490,6 +544,9 @@ function App() {
                 onDelete={deleteReport}
               />
             )}
+            {sidebarPanel === 'devices' && (
+              <DevicesPanel router={router} />
+            )}
             {sidebarPanel === 'settings' && (
               <SettingsPanel settings={settings} status={status} onSave={saveSettings} />
             )}
@@ -510,6 +567,11 @@ function App() {
       </header>
 
       {status.lastError && <div className="error-strip">{status.lastError}</div>}
+      {status.sniffer?.state === 'error' && (
+        <div className="error-strip error-strip--warning">
+          Traffic capture unavailable — byte counters will stay at 0. {status.sniffer.detail}
+        </div>
+      )}
 
       <section className="stat-strip">
         <Metric
@@ -784,6 +846,8 @@ function ConnectionTable(props: {
               // Calculate group aggregates
               const totalTx = conns.reduce((sum, c) => sum + (props.stats[c.id]?.bytesOut || 0), 0);
               const totalRx = conns.reduce((sum, c) => sum + (props.stats[c.id]?.bytesIn || 0), 0);
+              const totalTxRate = conns.reduce((sum, c) => sum + (props.stats[c.id]?.bytesOutRate || 0), 0);
+              const totalRxRate = conns.reduce((sum, c) => sum + (props.stats[c.id]?.bytesInRate || 0), 0);
               
               return (
                 <div key={processName}>
@@ -797,8 +861,8 @@ function ConnectionTable(props: {
                     </span>
                     <span className="process-group-line" />
                     <span className="process-group-transfer">
-                      <span>▲ {formatBytes(totalTx)}</span>
-                      <span>▼ {formatBytes(totalRx)}</span>
+                      <span>▲ {formatBytes(totalTx)}{totalTxRate >= 1 ? ` (${formatRate(totalTxRate)})` : ''}</span>
+                      <span>▼ {formatBytes(totalRx)}{totalRxRate >= 1 ? ` (${formatRate(totalRxRate)})` : ''}</span>
                     </span>
                   </div>
                   
@@ -844,17 +908,7 @@ function ConnectionTable(props: {
                               <strong>{connection.interfaceAlias || 'Unknown adapter'}</strong>
                               <small>{connection.gateway || 'No gateway'}</small>
                             </span>
-                            <span className="transfer-cell">
-                              <div className="transfer-cell__text">
-                                <span className="tx" title="Sent (Bytes Out)">
-                                  <span className="arrow">▲</span> {formatBytes(s?.bytesOut || 0)}
-                                </span>
-                                <span className="rx" title="Received (Bytes In)">
-                                  <span className="arrow">▼</span> {formatBytes(s?.bytesIn || 0)}
-                                </span>
-                              </div>
-                              <TrafficSparkline bytes={(s?.bytesOut || 0) + (s?.bytesIn || 0)} />
-                            </span>
+                            <TransferCell stats={s} />
                             <span>{formatTime(connection.lastSeen)}</span>
                           </button>
                         );
@@ -892,6 +946,7 @@ function ConnectionTable(props: {
                     <strong title={`${connection.remoteAddress}:${connection.remotePort}`}>
                       {formatEndpoint(connection.remoteAddress, connection.remotePort)}{' '}
                       <CopyButton text={`${connection.remoteAddress}:${connection.remotePort}`} />
+                      {connection.deviceName && <span className="device-tag" title="LAN device (from router)">{connection.deviceName}</span>}
                     </strong>
                     <small className="state-cell">
                       <span className={`state-dot ${getStateBadgeClass(connection.state)}`} />
@@ -905,17 +960,7 @@ function ConnectionTable(props: {
                     <strong>{connection.interfaceAlias || 'Unknown adapter'}</strong>
                     <small>{connection.gateway || 'No gateway'}</small>
                   </span>
-                  <span className="transfer-cell">
-                    <div className="transfer-cell__text">
-                      <span className="tx" title="Sent (Bytes Out)">
-                        <span className="arrow">▲</span> {formatBytes(s?.bytesOut || 0)}
-                      </span>
-                      <span className="rx" title="Received (Bytes In)">
-                        <span className="arrow">▼</span> {formatBytes(s?.bytesIn || 0)}
-                      </span>
-                    </div>
-                    <TrafficSparkline bytes={(s?.bytesOut || 0) + (s?.bytesIn || 0)} />
-                  </span>
+                  <TransferCell stats={s} />
                   <span>{formatTime(connection.lastSeen)}</span>
                 </button>
               );
@@ -1034,6 +1079,7 @@ function Inspector(props: {
         <Detail label="Process" value={`${connection.processName} (PID ${connection.pid})`} />
         <Detail label="Executable" value={connection.processPath || 'Unavailable'} />
         <Detail label="Local socket" value={`${connection.localAddress}:${connection.localPort}`} />
+        {connection.deviceName && <Detail label="LAN device" value={connection.deviceName} />}
         <Detail label="Gateway" value={connection.gateway || 'Unavailable'} />
         <Detail label="Adapter" value={connection.interfaceAlias || 'Unavailable'} />
         <Detail label="First seen" value={formatDate(connection.firstSeen)} />
@@ -1149,6 +1195,81 @@ function HistoryPanel(props: { history: Connection[]; onRefresh: () => void; onC
             <small>{connection.status} at {formatTime(connection.lastSeen)}</small>
           </button>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function DevicesPanel({ router }: { router: RouterState }) {
+  const [search, setSearch] = useState('');
+
+  const devices = useMemo(() => {
+    const term = search.toLowerCase().trim();
+    const list = term
+      ? router.devices.filter((d) =>
+          [d.hostname, d.ip, d.mac, d.connectionType, d.vendor || ''].some((v) => v.toLowerCase().includes(term)))
+      : router.devices;
+    // Online first, then by IP's final octet so the list reads like the subnet.
+    return [...list].sort((a, b) => {
+      if (a.online !== b.online) return a.online ? -1 : 1;
+      return lastOctet(a.ip) - lastOctet(b.ip);
+    });
+  }, [router.devices, search]);
+
+  const onlineCount = router.devices.filter((d) => d.online).length;
+
+  return (
+    <section className="panel devices-panel">
+      <div className="panel__header">
+        <div>
+          <h2>Network devices</h2>
+          <p>
+            {router.gateway?.model || 'Router'} · {onlineCount}/{router.devices.length} online
+            {router.collectedAt && ` · ${formatTime(router.collectedAt)}`}
+          </p>
+        </div>
+        {router.devices.length > 0 && (
+          <input
+            className="reports-search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Name, IP, MAC…"
+          />
+        )}
+      </div>
+      <div className="devices-list">
+        {router.error && <div className="empty">Couldn’t read the router: {router.error}</div>}
+        {!router.error && router.devices.length === 0 && (
+          <div className="empty">No devices reported yet — waiting for the first router poll.</div>
+        )}
+        {!router.error && router.devices.length > 0 && devices.length === 0 && (
+          <div className="empty">No devices match “{search}”.</div>
+        )}
+        {devices.map((device) => {
+          const label = deviceLabel(device);
+          const tooltip = device.vendor && device.hostname ? `${label} · ${device.vendor}` : label;
+          return (
+            <div key={device.mac} className={`device-row ${device.online ? '' : 'is-offline'}`}>
+              <span className="device-row__top">
+                <span className={`device-dot ${device.online ? 'is-online' : ''}`} />
+                <strong className={device.hostname ? '' : 'is-fallback'} title={tooltip}>{label}</strong>
+                <CopyButton text={device.hostname || device.mac} />
+                <span className={`device-band ${bandClass(device.connectionType)}`}>{device.connectionType || '—'}</span>
+              </span>
+              <span className="device-row__sub">
+                <span className="device-row__addr">
+                  <span title={device.ip}>{device.ip}</span>
+                  <small title={device.mac}>{device.mac}{device.randomizedMac ? ' · private' : ''}</small>
+                </span>
+                {device.signal && (
+                  <small className="device-row__signal" title={`${device.signal} dBm${device.linkRate ? ` · ${device.linkRate}` : ''}`}>
+                    {signalBars(device.signal)} {device.signal} dBm
+                  </small>
+                )}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -1379,6 +1500,38 @@ function serviceName(port: number) {
   return WELL_KNOWN_PORTS[port] || '';
 }
 
+function lastOctet(ip: string) {
+  const n = Number(ip.split('.').pop());
+  return Number.isFinite(n) ? n : 999;
+}
+
+// Best available name for a device: router/DNS hostname, then MAC vendor,
+// then a hint that the MAC is randomized so no vendor exists to look up.
+function deviceLabel(device: RouterDevice) {
+  if (device.hostname) return device.hostname;
+  if (device.vendor) return `${device.vendor} device`;
+  if (device.randomizedMac) return 'Unnamed (private MAC)';
+  return 'Unnamed device';
+}
+
+function bandClass(type: string) {
+  const t = (type || '').toLowerCase();
+  if (t.includes('5g')) return 'band-5g';
+  if (t.includes('2.4') || t === '2.4g') return 'band-24g';
+  if (t.includes('lan') || t.includes('eth')) return 'band-wired';
+  return '';
+}
+
+// WiFi RSSI (dBm) -> a quick 4-bar strength glyph.
+function signalBars(signal: string) {
+  const dbm = Number(signal);
+  if (!Number.isFinite(dbm)) return '';
+  if (dbm >= -55) return '▂▄▆█';
+  if (dbm >= -67) return '▂▄▆';
+  if (dbm >= -78) return '▂▄';
+  return '▂';
+}
+
 function isLocalAddress(address: string) {
   return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|127\.|169\.254\.|fe80:|fc|fd|::1)/i.test(address);
 }
@@ -1450,6 +1603,31 @@ function getStateBadgeClass(state: string) {
   if (lower.includes('wait')) return 'state-waiting';
   if (lower.includes('close') || lower.includes('time')) return 'state-closing';
   return 'state-other';
+}
+
+function formatRate(bytesPerSec: number) {
+  return `${formatBytes(bytesPerSec)}/s`;
+}
+
+function TransferCell({ stats }: { stats?: ConnectionStats }) {
+  const txRate = stats?.bytesOutRate || 0;
+  const rxRate = stats?.bytesInRate || 0;
+  const isLive = txRate >= 1 || rxRate >= 1;
+  return (
+    <span className={`transfer-cell ${isLive ? 'is-live' : ''}`}>
+      <div className="transfer-cell__text">
+        <span className="tx" title="Sent (Bytes Out)">
+          <span className="arrow">▲</span> {formatBytes(stats?.bytesOut || 0)}
+          {txRate >= 1 && <small className="transfer-rate">{formatRate(txRate)}</small>}
+        </span>
+        <span className="rx" title="Received (Bytes In)">
+          <span className="arrow">▼</span> {formatBytes(stats?.bytesIn || 0)}
+          {rxRate >= 1 && <small className="transfer-rate">{formatRate(rxRate)}</small>}
+        </span>
+      </div>
+      <TrafficSparkline bytes={(stats?.bytesOut || 0) + (stats?.bytesIn || 0)} />
+    </span>
+  );
 }
 
 function TrafficSparkline({ bytes }: { bytes: number }) {

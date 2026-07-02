@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -10,6 +11,7 @@ import { diffConnections, publicRemoteConnections, isPrivateOrReservedIP } from 
 import { investigateIp, traceRoute } from './src/investigator.js';
 import { openStore } from './src/store.js';
 import { PacketSniffer } from './src/packetSniffer.js';
+import { collectRouterDevices, isRouterConfigured } from './src/routerCollector.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,17 +28,31 @@ let status = {
   lastError: '',
   collectedAt: '',
   adapters: [],
-  routes: []
+  routes: [],
+  sniffer: { state: 'stopped', detail: '' }
 };
 let currentConnections = [];
 let connectionMap = new Map();
 let pollTimer = null;
+
+// Router (Telus/Arcadyan) integration: LAN device inventory pulled from the
+// gateway admin portal. `routerDevicesByIp` maps LAN IP -> device name so
+// connections and investigations can be labelled network-wide, not just for
+// this host.
+let routerState = { configured: isRouterConfigured(), collectedAt: '', devices: [], gateway: null, error: '' };
+let routerDevicesByIp = {};
+let routerPollTimer = null;
+const ROUTER_POLL_MS = Number(process.env.ROUTER_POLL_MS || 300000);
 
 const connectionStats = new Map();
 const globalDnsCache = new Map();
 let activePortMap = new Map();
 
 const packetSniffer = new PacketSniffer();
+packetSniffer.on('status', (snifferStatus) => {
+  status = { ...status, sniffer: snifferStatus };
+  broadcast({ type: 'sniffer_status', status });
+});
 packetSniffer.on('packet', (pkt) => {
   if (pkt.domains.length && pkt.resolvedIps.length) {
     for (const ip of pkt.resolvedIps) {
@@ -85,11 +101,15 @@ app.get('/api/status', (_req, res) => {
 });
 
 app.get('/api/connections', (_req, res) => {
-  res.json(currentConnections);
+  res.json(currentConnections.map(withDeviceName));
 });
 
 app.get('/api/history', (req, res) => {
   res.json(store.getHistory(Number(req.query.limit || 500)));
+});
+
+app.get('/api/router/devices', (_req, res) => {
+  res.json(routerState);
 });
 
 app.get('/api/investigate/:ip', async (req, res) => {
@@ -247,19 +267,36 @@ function buildState() {
     const inv = store.readInvestigation(conn.remoteAddress);
     if (inv) activeInvestigations[conn.remoteAddress] = inv;
     if (connectionStats.has(conn.id)) {
-      const s = connectionStats.get(conn.id);
-      statsPayload[conn.id] = { bytesIn: s.bytesIn, bytesOut: s.bytesOut, domains: Array.from(s.domains) };
+      statsPayload[conn.id] = statsForPayload(connectionStats.get(conn.id));
     }
   }
 
   return {
     status,
     settings,
-    connections: currentConnections,
+    connections: currentConnections.map(withDeviceName),
     publicConnections: publicRemoteConnections(currentConnections),
     historyCount: store.getHistory(1).length,
     investigations: activeInvestigations,
-    stats: statsPayload
+    stats: statsPayload,
+    router: routerState
+  };
+}
+
+// Label a connection with the router-reported device name when its remote end
+// is a known LAN device (leaves public-IP connections untouched).
+function withDeviceName(conn) {
+  const name = routerDevicesByIp[conn.remoteAddress];
+  return name ? { ...conn, deviceName: name } : conn;
+}
+
+function statsForPayload(stats) {
+  return {
+    bytesIn: stats.bytesIn,
+    bytesOut: stats.bytesOut,
+    bytesInRate: stats.bytesInRate || 0,
+    bytesOutRate: stats.bytesOutRate || 0,
+    domains: Array.from(stats.domains)
   };
 }
 
@@ -274,6 +311,7 @@ async function pollConnections() {
     connectionMap = diff.nextMap;
     currentConnections = diff.snapshot;
     status = {
+      ...status,
       collector: 'running',
       lastError: '',
       collectedAt: snapshot.collectedAt,
@@ -281,35 +319,56 @@ async function pollConnections() {
       routes: snapshot.routes
     };
 
+    // Start the sniffer once we know which adapters are live, so tshark
+    // captures on the interfaces that actually carry traffic instead of
+    // whatever interface happens to be first in its list.
+    if (packetSniffer.status.state === 'stopped') {
+      packetSniffer.start(snapshot.adapters.map((a) => a.interfaceAlias));
+    }
+
     const changed = [...diff.added, ...diff.updated, ...diff.closed];
     if (changed.length) {
       store.saveConnections(changed);
     }
     store.pruneHistory(settings.historyRetentionDays);
 
+    for (const conn of diff.closed) {
+      connectionStats.delete(conn.id);
+    }
+
     activePortMap.clear();
     const statsPayload = {};
+    const now = Date.now();
     for (const conn of currentConnections) {
       activePortMap.set(`${conn.protocol}|${conn.localAddress}|${conn.localPort}`, conn.id);
-      
+
       if (!connectionStats.has(conn.id)) {
-        connectionStats.set(conn.id, { bytesIn: 0, bytesOut: 0, domains: new Set() });
+        connectionStats.set(conn.id, {
+          bytesIn: 0, bytesOut: 0, domains: new Set(),
+          lastBytesIn: 0, lastBytesOut: 0, lastSampledAt: now,
+          bytesInRate: 0, bytesOutRate: 0
+        });
       }
       const stats = connectionStats.get(conn.id);
       if (globalDnsCache.has(conn.remoteAddress) && stats.domains.size === 0) {
         stats.domains.add(globalDnsCache.get(conn.remoteAddress));
       }
-      
-      statsPayload[conn.id] = {
-        bytesIn: stats.bytesIn,
-        bytesOut: stats.bytesOut,
-        domains: Array.from(stats.domains)
-      };
+
+      const elapsedSec = (now - stats.lastSampledAt) / 1000;
+      if (elapsedSec > 0.25) {
+        stats.bytesInRate = Math.max(0, (stats.bytesIn - stats.lastBytesIn) / elapsedSec);
+        stats.bytesOutRate = Math.max(0, (stats.bytesOut - stats.lastBytesOut) / elapsedSec);
+        stats.lastBytesIn = stats.bytesIn;
+        stats.lastBytesOut = stats.bytesOut;
+        stats.lastSampledAt = now;
+      }
+
+      statsPayload[conn.id] = statsForPayload(stats);
     }
 
     broadcast({
       type: changed.length ? 'connection_delta' : 'connection_snapshot',
-      connections: currentConnections,
+      connections: currentConnections.map(withDeviceName),
       added: diff.added,
       updated: diff.updated,
       closed: diff.closed,
@@ -341,8 +400,36 @@ function restartPolling() {
   pollConnections();
 }
 
+async function pollRouter() {
+  try {
+    const result = await collectRouterDevices();
+    routerState = {
+      configured: result.configured,
+      collectedAt: result.collectedAt,
+      devices: result.devices,
+      gateway: result.gateway || null,
+      error: result.error || ''
+    };
+    routerDevicesByIp = result.byIp || {};
+    broadcast({ type: 'router_devices', router: routerState });
+  } catch (error) {
+    routerState = { ...routerState, error: error.message, collectedAt: new Date().toISOString() };
+    broadcast({ type: 'router_devices', router: routerState });
+  }
+}
+
+function startRouterPolling() {
+  if (!isRouterConfigured()) {
+    console.log('Router integration disabled (set ROUTER_USER / ROUTER_PASS in backend/.env to enable).');
+    return;
+  }
+  if (routerPollTimer) clearInterval(routerPollTimer);
+  routerPollTimer = setInterval(pollRouter, ROUTER_POLL_MS);
+  pollRouter();
+}
+
 server.listen(PORT, () => {
   console.log(`NetShield Windows Connection Investigator running on http://localhost:${PORT}`);
   restartPolling();
-  packetSniffer.start();
+  startRouterPolling();
 });
