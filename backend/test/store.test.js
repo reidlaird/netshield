@@ -27,3 +27,26 @@ test('stores settings, history, and cached investigations', () => {
   store.cacheInvestigation('1.1.1.1', { ip: '1.1.1.1', checkedAt: '2026-06-28T00:00:00.000Z' });
   assert.equal(store.readInvestigation('1.1.1.1').ip, '1.1.1.1');
 });
+
+test('clearHistory deletes connections but keeps investigation and route caches', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netshield-store-'));
+  const store = openStore(path.join(tempDir, 'test.sqlite'));
+
+  store.saveConnections([{
+    id: 'tcp|a|1|b|2|3',
+    remoteAddress: '1.1.1.1',
+    remotePort: 443,
+    processName: 'test',
+    firstSeen: '2026-06-28T00:00:00.000Z',
+    lastSeen: '2026-06-28T00:00:01.000Z',
+    status: 'open'
+  }]);
+  store.cacheInvestigation('1.1.1.1', { ip: '1.1.1.1', checkedAt: '2026-06-28T00:00:00.000Z' });
+  store.cacheRoute('1.1.1.1', { target: '1.1.1.1', checkedAt: '2026-06-28T00:00:00.000Z', hops: [] });
+
+  store.clearHistory();
+
+  assert.equal(store.getHistory(10).length, 0);
+  assert.equal(store.readInvestigation('1.1.1.1').ip, '1.1.1.1');
+  assert.equal(store.readRoute('1.1.1.1').target, '1.1.1.1');
+});

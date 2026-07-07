@@ -14,12 +14,10 @@ and SNI domains in the inspector.
    the investigation `owner` block and drive a "flagged" badge from it.
 2. **Split `App.tsx`.** It is ~1,700 lines holding ~15 components; move ConnectionTable,
    Inspector, sidebar panels, and StatStrip into `frontend/src/components/`.
-3. **Small fixes.**
-   - Scope `clearHistory` to connection history only (it currently also wipes the
-     investigations and routes caches — `store.js`).
-   - Delete orphaned `WorldMapSvg.tsx` (170 KB, superseded by the Leaflet `EndpointMap`)
-     and leftover tooling (`generate-map.mjs`, `map-path.txt`, `scratch.js`).
-   - Use the backend's `bytesOutRate` in the sparkline instead of recomputing client-side.
+3. **Small fixes.** ✅ Shipped 2026-07-06: `clearHistory` scoped to connection history
+   (investigation/route caches survive), orphaned `WorldMapSvg.tsx` + map-generation
+   leftovers deleted, sparkline now uses the backend's byte rates instead of
+   recomputing client-side.
 
 ## Phase 2 — Put the "shield" in NetShield
 

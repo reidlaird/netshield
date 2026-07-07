@@ -1625,31 +1625,21 @@ function TransferCell({ stats }: { stats?: ConnectionStats }) {
           {rxRate >= 1 && <small className="transfer-rate">{formatRate(rxRate)}</small>}
         </span>
       </div>
-      <TrafficSparkline bytes={(stats?.bytesOut || 0) + (stats?.bytesIn || 0)} />
+      <TrafficSparkline rate={(stats?.bytesOutRate || 0) + (stats?.bytesInRate || 0)} />
     </span>
   );
 }
 
-function TrafficSparkline({ bytes }: { bytes: number }) {
+function TrafficSparkline({ rate }: { rate: number }) {
   const [history, setHistory] = useState<number[]>([]);
-  const prevBytes = useRef(bytes);
-  const prevTime = useRef(Date.now());
 
   useEffect(() => {
-    const now = Date.now();
-    const dt = (now - prevTime.current) / 1000;
-    const delta = bytes - prevBytes.current;
-    const rate = (dt > 0 && delta >= 0) ? delta / dt : 0;
-
-    prevBytes.current = bytes;
-    prevTime.current = now;
-
     setHistory((prev) => {
       const next = [...prev, rate];
       if (next.length > 8) next.shift();
       return next;
     });
-  }, [bytes]);
+  }, [rate]);
 
   if (history.length < 2) {
     return <span className="sparkline-placeholder" />;
