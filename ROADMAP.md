@@ -43,8 +43,10 @@ and SNI domains in the inspector.
 
 9. **Auth/bind.** Bind to `127.0.0.1` by default or token-gate the server; today anyone
    on the LAN can read connection history, and router credentials sit in plaintext `.env`.
-10. **Cheaper collection.** Keep a persistent PowerShell session streaming JSON instead
-    of spawning a new process every 2-second poll.
+10. **Cheaper collection.** ✅ Shipped 2026-07-06. One persistent PowerShell process
+    serves snapshot requests over stdin/stdout (module load paid once; ~4.5s per-poll
+    cost down to ~1-2s), with timeout + kill + respawn recovery and a one-shot spawn
+    fallback if the persistent process dies mid-request.
 11. **Run as a service.** Register a Scheduled Task at logon so monitoring and alerting
     work without a manually started terminal (prerequisite for Phase 2 alerts to matter).
 12. **Tests.** Add server route tests and frontend tests around the alert rules, which
