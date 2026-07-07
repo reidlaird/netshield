@@ -12,8 +12,10 @@ and SNI domains in the inspector.
    drives AbuseIPDB + VirusTotal lookups (keys in git-ignored `.env`, template in
    `.env.example`); scores land in a `reputation` block on the investigation and drive
    a red "Flagged" badge in the inspector and connection rows.
-2. **Split `App.tsx`.** It is ~1,700 lines holding ~15 components; move ConnectionTable,
-   Inspector, sidebar panels, and StatStrip into `frontend/src/components/`.
+2. **Split `App.tsx`.** ✅ Shipped 2026-07-06. App.tsx is now ~490 lines of state +
+   wiring; shared types live in `types.ts`, pure helpers in `lib/format.ts`, and the
+   ~15 components in `frontend/src/components/` (ConnectionTable, Inspector, WorldMap,
+   sidebar panels, ReportViewer, widgets).
 3. **Small fixes.** ✅ Shipped 2026-07-06: `clearHistory` scoped to connection history
    (investigation/route caches survive), orphaned `WorldMapSvg.tsx` + map-generation
    leftovers deleted, sparkline now uses the backend's byte rates instead of
