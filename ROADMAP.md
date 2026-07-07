@@ -8,18 +8,16 @@ and SNI domains in the inspector.
 
 ## Phase 1 — Finish & clean up
 
-1. **Wire the reputation toggle.** The `optionalApisEnabled` setting is persisted and
-   rendered but never read by the backend. Connect it to AbuseIPDB and/or VirusTotal,
-   with API keys in a git-ignored `.env` (template in `.env.example`). Merge scores into
-   the investigation `owner` block and drive a "flagged" badge from it.
+1. **Wire the reputation toggle.** ✅ Shipped 2026-07-06. `optionalApisEnabled` now
+   drives AbuseIPDB + VirusTotal lookups (keys in git-ignored `.env`, template in
+   `.env.example`); scores land in a `reputation` block on the investigation and drive
+   a red "Flagged" badge in the inspector and connection rows.
 2. **Split `App.tsx`.** It is ~1,700 lines holding ~15 components; move ConnectionTable,
    Inspector, sidebar panels, and StatStrip into `frontend/src/components/`.
-3. **Small fixes.**
-   - Scope `clearHistory` to connection history only (it currently also wipes the
-     investigations and routes caches — `store.js`).
-   - Delete orphaned `WorldMapSvg.tsx` (170 KB, superseded by the Leaflet `EndpointMap`)
-     and leftover tooling (`generate-map.mjs`, `map-path.txt`, `scratch.js`).
-   - Use the backend's `bytesOutRate` in the sparkline instead of recomputing client-side.
+3. **Small fixes.** ✅ Shipped 2026-07-06: `clearHistory` scoped to connection history
+   (investigation/route caches survive), orphaned `WorldMapSvg.tsx` + map-generation
+   leftovers deleted, sparkline now uses the backend's byte rates instead of
+   recomputing client-side.
 
 ## Phase 2 — Put the "shield" in NetShield
 
@@ -43,8 +41,10 @@ and SNI domains in the inspector.
 
 9. **Auth/bind.** Bind to `127.0.0.1` by default or token-gate the server; today anyone
    on the LAN can read connection history, and router credentials sit in plaintext `.env`.
-10. **Cheaper collection.** Keep a persistent PowerShell session streaming JSON instead
-    of spawning a new process every 2-second poll.
+10. **Cheaper collection.** ✅ Shipped 2026-07-06. One persistent PowerShell process
+    serves snapshot requests over stdin/stdout (module load paid once; ~4.5s per-poll
+    cost down to ~1-2s), with timeout + kill + respawn recovery and a one-shot spawn
+    fallback if the persistent process dies mid-request.
 11. **Run as a service.** ✅ Shipped 2026-07-06. `install-task.ps1` registers the
     "NetShield Server" Scheduled Task at logon (hidden window, crash restart x3,
     no elevation needed); `-Status` / `-Uninstall` / `-NoStart` flags included.

@@ -111,6 +111,14 @@ type Investigation = {
     longitude: number | null;
     source: string;
   };
+  reputation?: null | {
+    checkedAt: string;
+    sources: string[];
+    abuse: null | { score: number; totalReports: number; lastReportedAt: string; usageType: string };
+    virusTotal: null | { malicious: number; suspicious: number; harmless: number; undetected: number };
+    flagged: boolean;
+    error: string;
+  };
   fromCache?: boolean;
 };
 
@@ -604,6 +612,7 @@ function App() {
         <ConnectionTable
           connections={filteredConnections}
           stats={connectionStats}
+          investigations={investigations}
           selectedId={selectedId}
           filter={filter}
           processFilter={processFilter}
@@ -636,6 +645,7 @@ function App() {
             investigating={selectedConnection ? !!investigating[selectedConnection.remoteAddress] : false}
             tracing={selectedConnection ? !!tracing[selectedConnection.remoteAddress] : false}
             savingReport={savingReport}
+            reputationEnabled={settings.optionalApisEnabled}
             onInvestigate={investigate}
             onTrace={trace}
             onSaveReport={saveReport}
@@ -720,6 +730,7 @@ function Metric({
 function ConnectionTable(props: {
   connections: Connection[];
   stats: Record<string, ConnectionStats>;
+  investigations: Record<string, Investigation>;
   selectedId: string;
   filter: string;
   processFilter: string;
@@ -870,7 +881,7 @@ function ConnectionTable(props: {
                     <div className="process-group-children">
                       {conns.map((connection) => {
                         const s = props.stats[connection.id];
-                        const alerts = getConnectionAlerts(connection);
+                        const alerts = getConnectionAlerts(connection, props.investigations[connection.remoteAddress]);
                         return (
                           <button
                             key={connection.id}
@@ -886,7 +897,7 @@ function ConnectionTable(props: {
                                 </span>
                                 <CopyButton text={connection.processName} />
                                 {alerts.map(a => (
-                                  <span key={a} className="anomaly-badge" title={`Alert: ${a}`}>⚠️ {a}</span>
+                                  <span key={a} className={a === 'Flagged' ? 'anomaly-badge anomaly-badge--danger' : 'anomaly-badge'} title={`Alert: ${a}`}>{a === 'Flagged' ? '🚩' : '⚠️'} {a}</span>
                                 ))}
                               </strong>
                               <small>PID {connection.pid}</small>
@@ -921,7 +932,7 @@ function ConnectionTable(props: {
           ) : (
             props.connections.map((connection) => {
               const s = props.stats[connection.id];
-              const alerts = getConnectionAlerts(connection);
+              const alerts = getConnectionAlerts(connection, props.investigations[connection.remoteAddress]);
               return (
                 <button
                   key={connection.id}
@@ -937,7 +948,7 @@ function ConnectionTable(props: {
                       </span>
                       <CopyButton text={connection.processName} />
                       {alerts.map(a => (
-                        <span key={a} className="anomaly-badge" title={`Alert: ${a}`}>⚠️ {a}</span>
+                        <span key={a} className={a === 'Flagged' ? 'anomaly-badge anomaly-badge--danger' : 'anomaly-badge'} title={`Alert: ${a}`}>{a === 'Flagged' ? '🚩' : '⚠️'} {a}</span>
                       ))}
                     </strong>
                     <small>PID {connection.pid}</small>
@@ -1038,6 +1049,7 @@ function Inspector(props: {
   investigating: boolean;
   tracing: boolean;
   savingReport: boolean;
+  reputationEnabled: boolean;
   onInvestigate: (ip: string) => void;
   onTrace: (target: string) => void;
   onSaveReport: (route: RouteTrace, connection: Connection) => void;
@@ -1054,7 +1066,12 @@ function Inspector(props: {
     <section className="panel inspector">
       <div className="panel__header">
         <div>
-          <h2>{connection.remoteAddress} <CopyButton text={connection.remoteAddress} /></h2>
+          <h2>
+            {connection.remoteAddress} <CopyButton text={connection.remoteAddress} />
+            {investigation?.reputation?.flagged && (
+              <span className="reputation-badge" title={reputationSummary(investigation)}>🚩 Flagged</span>
+            )}
+          </h2>
           <p>{connection.processName} <CopyButton text={connection.processName} /> on port {connection.remotePort}{service ? ` (${service})` : ''}</p>
         </div>
         <div className="button-row">
@@ -1103,6 +1120,18 @@ function Inspector(props: {
             )}
             <Detail label="ASN" value={formatAsn(investigation) || 'Unavailable'} />
             <Detail label="Location" value={investigation.geo?.city ? `${investigation.geo.city}, ${investigation.geo.country}` : (investigation.geo?.country || 'Unavailable')} />
+            {investigation.reputation && investigation.reputation.sources.length > 0 && (
+              <Detail label="Reputation" value={reputationSummary(investigation)} />
+            )}
+            {investigation.reputation?.error && (
+              <p className="lookup-error">Reputation lookup failed ({investigation.reputation.error}).</p>
+            )}
+            {props.reputationEnabled && !investigation.reputation && (
+              <p className="muted">
+                Reputation APIs are enabled but no result is available — add ABUSEIPDB_API_KEY or
+                VIRUSTOTAL_API_KEY to backend/.env, then re-investigate.
+              </p>
+            )}
             {(investigation.dnsCacheHints || []).length > 0 && (
               <div className="dns-hints">
                 {investigation.dnsCacheHints.map((hint, index) => (
@@ -1479,6 +1508,19 @@ function ownerName(investigation: Investigation) {
   return '';
 }
 
+function reputationSummary(investigation: Investigation) {
+  const rep = investigation.reputation;
+  if (!rep) return '';
+  const parts: string[] = [];
+  if (rep.abuse) {
+    parts.push(`AbuseIPDB ${rep.abuse.score}/100${rep.abuse.totalReports ? ` (${rep.abuse.totalReports} reports)` : ''}`);
+  }
+  if (rep.virusTotal) {
+    parts.push(`VirusTotal ${rep.virusTotal.malicious} malicious / ${rep.virusTotal.suspicious} suspicious`);
+  }
+  return parts.join(' · ');
+}
+
 function formatAsn(investigation: Investigation) {
   const asn = investigation.owner?.asn || investigation.rdap?.asn || '';
   const asname = investigation.owner?.asname || '';
@@ -1625,31 +1667,21 @@ function TransferCell({ stats }: { stats?: ConnectionStats }) {
           {rxRate >= 1 && <small className="transfer-rate">{formatRate(rxRate)}</small>}
         </span>
       </div>
-      <TrafficSparkline bytes={(stats?.bytesOut || 0) + (stats?.bytesIn || 0)} />
+      <TrafficSparkline rate={(stats?.bytesOutRate || 0) + (stats?.bytesInRate || 0)} />
     </span>
   );
 }
 
-function TrafficSparkline({ bytes }: { bytes: number }) {
+function TrafficSparkline({ rate }: { rate: number }) {
   const [history, setHistory] = useState<number[]>([]);
-  const prevBytes = useRef(bytes);
-  const prevTime = useRef(Date.now());
 
   useEffect(() => {
-    const now = Date.now();
-    const dt = (now - prevTime.current) / 1000;
-    const delta = bytes - prevBytes.current;
-    const rate = (dt > 0 && delta >= 0) ? delta / dt : 0;
-
-    prevBytes.current = bytes;
-    prevTime.current = now;
-
     setHistory((prev) => {
       const next = [...prev, rate];
       if (next.length > 8) next.shift();
       return next;
     });
-  }, [bytes]);
+  }, [rate]);
 
   if (history.length < 2) {
     return <span className="sparkline-placeholder" />;
@@ -1680,10 +1712,14 @@ function TrafficSparkline({ bytes }: { bytes: number }) {
   );
 }
 
-function getConnectionAlerts(connection: Connection) {
+function getConnectionAlerts(connection: Connection, investigation?: Investigation) {
   const alerts: string[] = [];
   const port = connection.remotePort;
   const isPublic = !isLocalAddress(connection.remoteAddress);
+
+  if (investigation?.reputation?.flagged) {
+    alerts.push('Flagged');
+  }
 
   if (port === 80 && isPublic) {
     const lowerProc = connection.processName.toLowerCase();

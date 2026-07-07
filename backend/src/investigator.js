@@ -3,6 +3,7 @@ import net from 'node:net';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isPrivateOrReservedIP, normalizeAddress } from './connectionUtils.js';
+import { isReputationConfigured, lookupReputation } from './reputation.js';
 import geoip from 'geoip-lite';
 const execFileAsync = promisify(execFile);
 
@@ -25,22 +26,27 @@ export function investigateIp(ip, options = {}) {
 async function doInvestigate(address, options = {}) {
   const checkedAt = new Date().toISOString();
   const privateAddress = isPrivateOrReservedIP(address);
+  const wantReputation = Boolean(options.reputationEnabled) && !privateAddress && isReputationConfigured();
   const cached = options.store?.readInvestigation(address);
 
   if (cached && !isStale(cached.checkedAt, options.maxCacheAgeMs ?? 1000 * 60 * 60 * 24)) {
     // Re-investigate records cached before geo/owner support existed, and
     // records whose lookups all failed (timeouts, 429 rate limits) so they heal.
     const healthy = cached.privateAddress || (cached.owner && !cached.owner.error && cached.owner.name);
-    if (cached.geo && healthy) {
+    // Records cached before reputation was enabled (or whose reputation
+    // lookup failed outright) heal the same way owner records do.
+    const reputationOk = !wantReputation || (cached.reputation && !cached.reputation.error);
+    if (cached.geo && healthy && reputationOk) {
       return { ...cached, fromCache: true };
     }
   }
 
-  const [ptr, dnsCacheHints, rdap, ipApi] = await Promise.all([
+  const [ptr, dnsCacheHints, rdap, ipApi, reputation] = await Promise.all([
     resolvePtr(address),
     resolveDnsCacheHints(address),
     privateAddress ? Promise.resolve(null) : lookupRdap(address),
-    privateAddress ? Promise.resolve(null) : lookupIpApi(address)
+    privateAddress ? Promise.resolve(null) : lookupIpApi(address),
+    wantReputation ? lookupReputation(address) : Promise.resolve(cached?.reputation ?? null)
   ]);
 
   // ip-api gives city-level results with good IPv6 coverage; geoip-lite is the
@@ -86,7 +92,8 @@ async function doInvestigate(address, options = {}) {
     dnsCacheHints,
     rdap,
     owner,
-    geo
+    geo,
+    reputation
   };
 
   options.store?.cacheInvestigation(address, result);

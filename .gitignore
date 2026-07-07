@@ -3,6 +3,7 @@ frontend/dist/
 backend/data/
 .env
 .env.*
+!.env.example
 *.log
 *.sqlite
 *.sqlite-*
