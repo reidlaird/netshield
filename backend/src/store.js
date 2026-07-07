@@ -124,8 +124,11 @@ export function openStore(dbPath) {
     return getConnections.all(Number(limit)).map((row) => JSON.parse(row.json));
   }
 
+  // Clears connection history only. Investigations and routes are lookup
+  // caches, not history — wiping them just forces slow re-fetches against
+  // rate-limited external APIs.
   function clearHistory() {
-    db.exec('DELETE FROM connections; DELETE FROM investigations; DELETE FROM routes;');
+    db.exec('DELETE FROM connections;');
   }
 
   function pruneHistory(retentionDays) {
