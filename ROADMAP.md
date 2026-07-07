@@ -8,10 +8,10 @@ and SNI domains in the inspector.
 
 ## Phase 1 — Finish & clean up
 
-1. **Wire the reputation toggle.** The `optionalApisEnabled` setting is persisted and
-   rendered but never read by the backend. Connect it to AbuseIPDB and/or VirusTotal,
-   with API keys in a git-ignored `.env` (template in `.env.example`). Merge scores into
-   the investigation `owner` block and drive a "flagged" badge from it.
+1. **Wire the reputation toggle.** ✅ Shipped 2026-07-06. `optionalApisEnabled` now
+   drives AbuseIPDB + VirusTotal lookups (keys in git-ignored `.env`, template in
+   `.env.example`); scores land in a `reputation` block on the investigation and drive
+   a red "Flagged" badge in the inspector and connection rows.
 2. **Split `App.tsx`.** It is ~1,700 lines holding ~15 components; move ConnectionTable,
    Inspector, sidebar panels, and StatStrip into `frontend/src/components/`.
 3. **Small fixes.**

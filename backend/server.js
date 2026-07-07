@@ -114,7 +114,7 @@ app.get('/api/router/devices', (_req, res) => {
 
 app.get('/api/investigate/:ip', async (req, res) => {
   try {
-    const investigation = await investigateIp(req.params.ip, { store });
+    const investigation = await investigateIp(req.params.ip, { store, reputationEnabled: settings.optionalApisEnabled });
     broadcast({ type: 'investigation_update', investigation });
     res.json(investigation);
   } catch (error) {
@@ -384,7 +384,7 @@ async function pollConnections() {
     for (const ip of newPublicIPs) {
       // investigateIp handles caching internally; calling it unconditionally
       // lets stale or previously-failed lookups heal instead of sticking forever.
-      investigateIp(ip, { store })
+      investigateIp(ip, { store, reputationEnabled: settings.optionalApisEnabled })
         .then(inv => broadcast({ type: 'investigation_update', investigation: inv }))
         .catch(e => console.error('Auto-investigate failed:', e.message));
     }
