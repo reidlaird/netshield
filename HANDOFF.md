@@ -14,12 +14,10 @@
 Nothing in flight — the fix is complete and verified.
 
 ## Next steps
-Accepted feature backlog (user welcomed these, none implemented — also saved to Claude memory):
-1. Traffic sparklines from existing per-connection byte counters
-2. Anomaly flags (odd ports, unexpected countries, unsigned executables, upload-heavy ratios)
-3. Process grouping/rollups in the connection table
-4. SNI enrichment — surface sniffer-captured domains per connection
-5. Wire the dormant "optional reputation APIs" toggle to AbuseIPDB/VirusTotal
+The feature backlog now lives in `ROADMAP.md` (added 2026-07-06). Of the original five
+backlog items, four shipped (sparklines, anomaly flags, process grouping, SNI domains);
+the remaining one — wiring the reputation-API toggle to AbuseIPDB/VirusTotal — is
+Phase 1 item 1 of the roadmap.
 
 ## Gotchas
 - rdap.org itself is a fast redirector; the slowness is in the regional registries behind it (one 31s ARIN response observed). Never trust a single RDAP round-trip to be fast.
