@@ -1423,6 +1423,31 @@ select:focus {
   box-shadow: 0 0 6px rgba(240, 180, 81, 0.1);
 }
 
+.anomaly-badge--danger {
+  background: rgba(235, 87, 87, 0.14);
+  color: #eb5757;
+  border-color: rgba(235, 87, 87, 0.35);
+  box-shadow: 0 0 6px rgba(235, 87, 87, 0.12);
+}
+
+/* Reputation flag badge (red — reputation APIs marked the endpoint malicious) */
+.reputation-badge {
+  background: rgba(235, 87, 87, 0.14);
+  color: #eb5757;
+  border: 1px solid rgba(235, 87, 87, 0.35);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  vertical-align: middle;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px rgba(235, 87, 87, 0.12);
+}
+
 /* Process Grouping Rollup Styles */
 .toggle-group-btn {
   font-size: 0.78rem;
