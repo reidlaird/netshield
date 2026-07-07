@@ -11,6 +11,10 @@ npm start
 
 Open http://localhost:3010.
 
+Or double-click `NetShield.cmd` — it builds the frontend on first run, starts the
+server, and opens the dashboard (or just opens the dashboard if the server is
+already running).
+
 For development:
 
 ```powershell
