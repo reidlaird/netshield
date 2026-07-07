@@ -45,8 +45,9 @@ and SNI domains in the inspector.
     serves snapshot requests over stdin/stdout (module load paid once; ~4.5s per-poll
     cost down to ~1-2s), with timeout + kill + respawn recovery and a one-shot spawn
     fallback if the persistent process dies mid-request.
-11. **Run as a service.** Register a Scheduled Task at logon so monitoring and alerting
-    work without a manually started terminal (prerequisite for Phase 2 alerts to matter).
+11. **Run as a service.** ✅ Shipped 2026-07-06. `install-task.ps1` registers the
+    "NetShield Server" Scheduled Task at logon (hidden window, crash restart x3,
+    no elevation needed); `-Status` / `-Uninstall` / `-NoStart` flags included.
 12. **Tests.** Add server route tests and frontend tests around the alert rules, which
     become correctness-critical once they trigger notifications. Current coverage: 12
     backend unit tests, zero frontend tests.
