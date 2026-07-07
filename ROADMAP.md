@@ -45,8 +45,9 @@ and SNI domains in the inspector.
    on the LAN can read connection history, and router credentials sit in plaintext `.env`.
 10. **Cheaper collection.** Keep a persistent PowerShell session streaming JSON instead
     of spawning a new process every 2-second poll.
-11. **Run as a service.** Register a Scheduled Task at logon so monitoring and alerting
-    work without a manually started terminal (prerequisite for Phase 2 alerts to matter).
+11. **Run as a service.** ✅ Shipped 2026-07-06. `install-task.ps1` registers the
+    "NetShield Server" Scheduled Task at logon (hidden window, crash restart x3,
+    no elevation needed); `-Status` / `-Uninstall` / `-NoStart` flags included.
 12. **Tests.** Add server route tests and frontend tests around the alert rules, which
     become correctness-critical once they trigger notifications. Current coverage: 12
     backend unit tests, zero frontend tests.
